@@ -1,0 +1,37 @@
+{
+  "name": "bot-hmonn",
+  "version": "1.0.0",
+  "description": "Telegram Bot for Huawei B312 IP Monitor - Monitor and change WAN IP automatically",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test.ts"
+  },
+  "keywords": [
+    "telegram-bot",
+    "huawei",
+    "b312",
+    "ip-monitor",
+    "modem",
+    "automation"
+  ],
+  "author": "alrescha79-cmd",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alrescha79-cmd/bot-hmonn"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "axios": "^1.7.9"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
