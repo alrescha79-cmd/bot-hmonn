@@ -3,10 +3,15 @@ import { message } from "telegraf/filters";
 import {
   getWanIP,
   getWanIPWithAuth,
+  getFullModemInfo,
+  getDetailedModemInfo,
   changeIP,
   checkConnection,
   login,
   autoLogin,
+  setModemIP,
+  getModemIP,
+  setModemCredentials,
   ModemInfo,
 } from "./modem";
 import {
@@ -20,6 +25,8 @@ import {
   getLastIPInfo,
   saveCredentials,
   getCredentials,
+  saveModemConfig,
+  getModemConfig,
 } from "./storage";
 
 // Validate environment variables
@@ -57,16 +64,35 @@ function clearSession(userId: number) {
 }
 
 /**
+ * Initialize modem config from storage
+ */
+async function initModemConfig() {
+  const config = await getModemConfig();
+  if (config) {
+    if (config.ip) {
+      setModemIP(config.ip);
+    }
+    if (config.username && config.password) {
+      setModemCredentials(config.username, config.password);
+    }
+    console.log(`📡 Loaded modem config: IP=${config.ip}, User=${config.username}`);
+  }
+}
+
+// Initialize modem config on startup
+initModemConfig();
+
+/**
  * Get modem info with stored timestamp
  */
 async function getModemInfoWithTimestamp(): Promise<ModemInfo> {
-  const info = await getWanIPWithAuth();
+  const info = await getFullModemInfo();
   const lastInfo = await getLastIPInfo();
-  
+
   if (lastInfo.timestamp) {
     info.timestamp = lastInfo.timestamp;
   }
-  
+
   return info;
 }
 
@@ -76,13 +102,13 @@ async function getModemInfoWithTimestamp(): Promise<ModemInfo> {
 bot.start(async (ctx) => {
   try {
     const username = ctx.from?.username || ctx.from?.first_name;
-    
+
     // Try to get modem info, but don't wait too long
     let info: ModemInfo;
     try {
       info = await Promise.race([
         getModemInfoWithTimestamp(),
-        new Promise<ModemInfo>((resolve) => 
+        new Promise<ModemInfo>((resolve) =>
           setTimeout(() => resolve({
             name: "Huawei B312",
             wan_ip: "Checking...",
@@ -98,7 +124,7 @@ bot.start(async (ctx) => {
         timestamp: undefined
       };
     }
-    
+
     const menu = homeMenu(info, username);
 
     await ctx.reply(menu.text, {
@@ -116,14 +142,14 @@ bot.start(async (ctx) => {
 bot.action("home", async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    
+
     const username = ctx.from?.username || ctx.from?.first_name;
     let info: ModemInfo;
-    
+
     try {
       info = await Promise.race([
         getModemInfoWithTimestamp(),
-        new Promise<ModemInfo>((resolve) => 
+        new Promise<ModemInfo>((resolve) =>
           setTimeout(() => resolve({
             name: "Huawei B312",
             wan_ip: "Checking...",
@@ -138,7 +164,7 @@ bot.action("home", async (ctx) => {
         timestamp: undefined
       };
     }
-    
+
     const menu = homeMenu(info, username);
 
     await ctx.editMessageText(menu.text, {
@@ -151,23 +177,40 @@ bot.action("home", async (ctx) => {
 });
 
 /**
- * Action: Check Status
+ * Action: Check Status / Lihat Detail
  */
 bot.action("check_status", async (ctx) => {
   try {
-    await ctx.answerCbQuery("Mengecek status modem...");
-    
-    const isConnected = await checkConnection();
-    const info = await getModemInfoWithTimestamp();
+    await ctx.answerCbQuery("Memuat detail modem...");
 
-    const statusText = `📊 **Status Modem**
+    const detail = await getDetailedModemInfo();
 
-Status Koneksi: ${isConnected ? "✅ Terhubung" : "❌ Tidak Terhubung"}
-Nama Modem: ${info.name}
-IP WAN: ${info.wan_ip}
-Terakhir Diganti: ${info.timestamp || "-"}`;
+    const detailText = `━━━━━━━━━━━━━━━━━━━━
+📊 *DETAIL MODEM*
+━━━━━━━━━━━━━━━━━━━━
 
-    await ctx.editMessageText(statusText, {
+🏷️ Perangkat: *${detail.deviceName}*
+🌐 Alamat IP: \`${detail.wanIP}\`
+📶 Operator: *${detail.provider}*
+
+━━━━━━━━━━━━━━━━━━━━
+📡 *KUALITAS SINYAL*
+━━━━━━━━━━━━━━━━━━━━
+
+${detail.signalStrength}
+📊 RSSI: ${detail.rssi}
+
+━━━━━━━━━━━━━━━━━━━━
+📈 *STATISTIK DATA*
+━━━━━━━━━━━━━━━━━━━━
+
+⬇️ Total Unduhan: *${detail.totalDownload}*
+⬆️ Total Unggahan: *${detail.totalUpload}*
+📅 Pemakaian Bulan Ini: *${detail.monthUsage}*
+
+━━━━━━━━━━━━━━━━━━━━`;
+
+    await ctx.editMessageText(detailText, {
       reply_markup: backToHomeButton(),
       parse_mode: "Markdown",
     });
@@ -199,7 +242,7 @@ bot.action("cfg", async (ctx) => {
 bot.action("info", async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    
+
     const infoText = `ℹ️ **Informasi Modem**
 
 Model: Huawei B312
@@ -222,12 +265,38 @@ API: Huawei HiLink API
 });
 
 /**
+ * Action: Setup Modem - Start setup flow
+ */
+bot.action("setup_modem", async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+
+    const session = getSession(ctx.from.id);
+    session.waitingFor = "modem_ip";
+
+    const currentIP = getModemIP();
+
+    await ctx.reply(
+      `⚙️ **Setup Modem**\n\nIP Address saat ini: \`${currentIP}\`\n\nMasukkan IP Address modem (contoh: 192.168.8.1):`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "❌ Batal", callback_data: "cancel" }]],
+        },
+      }
+    );
+  } catch (error: any) {
+    await ctx.reply(`❌ Error: ${error.message}`);
+  }
+});
+
+/**
  * Action: Login - Start login flow
  */
 bot.action("login", async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    
+
     const session = getSession(ctx.from.id);
     session.waitingFor = "username";
 
@@ -266,7 +335,7 @@ bot.action("confirm_chg_ip", async (ctx) => {
 
     // Execute IP change
     const newInfo = await changeIP();
-    
+
     // Save to storage
     await updateIPChange(newInfo);
 
@@ -296,7 +365,7 @@ bot.action("cancel", async (ctx) => {
   try {
     await ctx.answerCbQuery("Dibatalkan");
     clearSession(ctx.from.id);
-    
+
     const info = await getModemInfoWithTimestamp();
     const username = ctx.from?.username || ctx.from?.first_name;
     const menu = homeMenu(info, username);
@@ -317,6 +386,61 @@ bot.on(message("text"), async (ctx) => {
   const session = getSession(ctx.from.id);
 
   try {
+    // Setup flow - waiting for modem IP
+    if (session.waitingFor === "modem_ip") {
+      const ip = ctx.message.text.trim();
+
+      // Validate IP format
+      const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+      if (!ipRegex.test(ip)) {
+        await ctx.reply("❌ Format IP tidak valid. Contoh: 192.168.8.1\n\nMasukkan IP Address modem:");
+        return;
+      }
+
+      session.modemIP = ip;
+      session.waitingFor = "modem_username";
+      await ctx.reply(`✅ IP: ${ip}\n\nMasukkan username modem (default: admin):`);
+      return;
+    }
+
+    // Setup flow - waiting for modem username
+    if (session.waitingFor === "modem_username") {
+      session.modemUsername = ctx.message.text.trim() || "admin";
+      session.waitingFor = "modem_password";
+      await ctx.reply(`✅ Username: ${session.modemUsername}\n\nMasukkan password modem:`);
+      return;
+    }
+
+    // Setup flow - waiting for modem password
+    if (session.waitingFor === "modem_password") {
+      const password = ctx.message.text.trim();
+
+      // Save config
+      const config = {
+        ip: session.modemIP,
+        username: session.modemUsername,
+        password: password,
+      };
+
+      await saveModemConfig(config);
+      setModemIP(config.ip);
+
+      await ctx.reply(
+        `✅ **Konfigurasi Berhasil Disimpan!**\n\n` +
+        `📡 IP: \`${config.ip}\`\n` +
+        `👤 Username: \`${config.username}\`\n` +
+        `🔑 Password: \`${"*".repeat(password.length)}\`\n\n` +
+        `Konfigurasi akan digunakan untuk koneksi selanjutnya.`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: backToHomeButton(),
+        }
+      );
+
+      clearSession(ctx.from.id);
+      return;
+    }
+
     // Login flow - waiting for username
     if (session.waitingFor === "username") {
       session.username = ctx.message.text;
@@ -338,7 +462,7 @@ bot.on(message("text"), async (ctx) => {
         if (success) {
           // Save credentials
           await saveCredentials(username, password);
-          
+
           await ctx.reply("✅ Login berhasil!\n\nCredentials telah disimpan.", {
             reply_markup: backToHomeButton(),
           });
@@ -387,14 +511,14 @@ async function startBot() {
   try {
     console.log("🤖 Starting Telegram Bot...");
     console.log("📡 Connecting to Telegram API...");
-    
+
     // Get bot info first
     const botInfo = await bot.telegram.getMe();
     console.log(`✅ Connected as @${botInfo.username}`);
     console.log("✅ Bot is running!");
     console.log("🎯 Bot ready to receive commands");
     console.log("📝 Use /start to begin\n");
-    
+
     // Start polling with error handling
     await bot.launch({
       dropPendingUpdates: true,
@@ -407,9 +531,9 @@ async function startBot() {
       }
       throw err;
     });
-    
+
     console.log("📡 Polling started successfully\n");
-    
+
   } catch (error: any) {
     console.error("❌ Failed to start bot:", error.message);
     console.error("Full error:", error);
@@ -424,7 +548,7 @@ process.once("SIGINT", () => {
   console.log("\n⏹️ Stopping bot...");
   try {
     bot.stop("SIGINT");
-  } catch (e) {}
+  } catch (e) { }
   process.exit(0);
 });
 
@@ -432,6 +556,6 @@ process.once("SIGTERM", () => {
   console.log("\n⏹️ Stopping bot...");
   try {
     bot.stop("SIGTERM");
-  } catch (e) {}
+  } catch (e) { }
   process.exit(0);
 });

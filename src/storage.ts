@@ -3,6 +3,12 @@ import { ModemInfo } from "./modem";
 
 const STORAGE_FILE = "./storage.json";
 
+export interface ModemConfig {
+  ip: string;
+  username: string;
+  password: string;
+}
+
 export interface StorageData {
   lastIP?: string;
   lastChangeTimestamp?: string;
@@ -10,6 +16,7 @@ export interface StorageData {
     username: string;
     password: string;
   };
+  modemConfig?: ModemConfig;
 }
 
 /**
@@ -72,4 +79,21 @@ export async function saveCredentials(username: string, password: string): Promi
 export async function getCredentials(): Promise<{ username?: string; password?: string }> {
   const storage = await readStorage();
   return storage.loginCredentials || {};
+}
+
+/**
+ * Save modem configuration (IP, username, password)
+ */
+export async function saveModemConfig(config: ModemConfig): Promise<void> {
+  const storage = await readStorage();
+  storage.modemConfig = config;
+  await writeStorage(storage);
+}
+
+/**
+ * Get modem configuration
+ */
+export async function getModemConfig(): Promise<ModemConfig | null> {
+  const storage = await readStorage();
+  return storage.modemConfig || null;
 }
