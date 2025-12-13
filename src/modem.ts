@@ -2,16 +2,17 @@ import axios from "axios";
 import crypto from "crypto";
 import { getModemConfig } from "./storage";
 
+// Modem configuration
 let modemIP = process.env.MODEM_IP || "192.168.8.1";
 let modemUsername = process.env.MODEM_USERNAME || "admin";
 let modemPassword = process.env.MODEM_PASSWORD || "admin";
 
-// Store session after login for authenticated requests
+// Store session and token after login for authenticated requests
 let currentSession: string | null = null;
+let currentToken: string | null = null;
 
 export function setModemIP(ip: string) {
   modemIP = ip;
-  // Clear session when IP changes
   currentSession = null;
 }
 
@@ -22,6 +23,7 @@ export function getModemIP(): string {
 export function setModemCredentials(username: string, password: string) {
   modemUsername = username;
   modemPassword = password;
+  currentSession = null;
 }
 
 export function getModemCredentials(): { username: string; password: string } {
@@ -59,7 +61,18 @@ function parseXMLValue(xml: string, tag: string): string {
 }
 
 /**
- * Get token and session from Huawei B312
+ * Format bytes to human readable format
+ */
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+/**
+ * Get token and session from Huawei modem
  */
 export async function getToken(): Promise<{ token: string; session: string }> {
   try {
@@ -67,7 +80,6 @@ export async function getToken(): Promise<{ token: string; session: string }> {
       timeout: 10000,
     });
 
-    // Parse XML response
     const xmlData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
     const token = parseXMLValue(xmlData, "TokInfo");
     const sesInfo = parseXMLValue(xmlData, "SesInfo");
@@ -76,7 +88,6 @@ export async function getToken(): Promise<{ token: string; session: string }> {
       throw new Error("Failed to get token from modem");
     }
 
-    // Try to get session from Set-Cookie header first
     let session = "";
     const setCookie = res.headers['set-cookie'];
     if (setCookie && setCookie.length > 0) {
@@ -89,9 +100,7 @@ export async function getToken(): Promise<{ token: string; session: string }> {
       }
     }
 
-    // Fallback to SesInfo from XML (format might already be SessionID=xxx)
     if (!session && sesInfo) {
-      // SesInfo might be the full cookie value or just the session ID
       if (sesInfo.includes('SessionID=')) {
         session = sesInfo;
       } else {
@@ -99,234 +108,432 @@ export async function getToken(): Promise<{ token: string; session: string }> {
       }
     }
 
-    console.log(`🔑 Got token: ${token.substring(0, 20)}..., session: ${session.substring(0, 30)}...`);
-
     return { token, session };
-  } catch (error) {
-    console.error("Error getting token:", error);
-    throw new Error("Tidak bisa terhubung ke modem. Pastikan modem hidup dan terhubung.");
-  }
-}
-
-/**
- * Get current WAN IP from Huawei B312
- * Use /device/information endpoint which returns WanIPAddress and DeviceName
- */
-export async function getWanIP(): Promise<ModemInfo> {
-  // Build headers with session cookie if available
-  const headers: Record<string, string> = {
-    'X-Requested-With': 'XMLHttpRequest',
-  };
-  if (currentSession) {
-    headers.Cookie = currentSession;
-  }
-
-  // Try /device/information first (this is the endpoint that works)
-  try {
-    const res = await axios.get(`${getBaseURL()}/device/information`, {
-      timeout: 10000,
-      headers,
-    });
-
-    const xmlData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-
-    // Check for error
-    const errorCode = parseXMLValue(xmlData, "code");
-    if (errorCode) {
-      console.log(`📡 /device/information error: ${errorCode}`);
-      // Clear session for auth errors
-      if (errorCode === "125002" || errorCode === "125003") {
-        currentSession = null;
-      }
-    } else {
-      // Success! Get WAN IP and Device Name
-      const wanIP = parseXMLValue(xmlData, "WanIPAddress");
-      const deviceName = parseXMLValue(xmlData, "DeviceName") || "Huawei B312";
-
-      if (wanIP) {
-        console.log(`✅ Got WAN IP: ${wanIP} from /device/information`);
-        return {
-          wan_ip: wanIP,
-          name: deviceName,
-        };
-      }
-    }
   } catch (error: any) {
-    console.error("Error from /device/information:", error.message);
+    throw new Error("Failed to get token: " + error.message);
   }
-
-  // Fallback: Try /monitoring/status
-  try {
-    const res = await axios.get(`${getBaseURL()}/monitoring/status`, {
-      timeout: 10000,
-      headers,
-    });
-
-    const xmlData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-    const errorCode = parseXMLValue(xmlData, "code");
-
-    if (!errorCode) {
-      const wanIP = parseXMLValue(xmlData, "WanIPAddress") || parseXMLValue(xmlData, "WanIpAddress");
-      if (wanIP) {
-        return {
-          wan_ip: wanIP,
-          name: "Huawei B312",
-        };
-      }
-    }
-  } catch (error) {
-    // Ignore
-  }
-
-  // All attempts failed - login might be required
-  return {
-    wan_ip: "Login Required",
-    name: "Huawei B312",
-  };
 }
 
 /**
- * Encode password for Huawei B312 login
- * Password type 4 = base64(sha256(username + base64(sha256(password).hexdigest) + token).hexdigest)
- * 
- * Based on huawei-lte-api Python library:
- * - First: base64.b64encode(sha256(password).hexdigest().encode('ascii'))
- * - Then: base64.b64encode(sha256(username + first + token).hexdigest().encode('ascii'))
+ * Encode password using SHA256 (for password_type 4)
  */
-function encodePassword(username: string, password: string, token: string): string {
-  // First hash: sha256(password) -> hex string -> encode as ascii -> base64
-  const firstHash = crypto.createHash("sha256").update(password, "utf8").digest("hex");
-  // Base64 encode the hex string directly (as ASCII bytes), NOT the binary hash
-  const firstBase64 = Buffer.from(firstHash, "ascii").toString("base64");
+function encodePassword(password: string, token: string): string {
+  // SHA256 hash of password
+  const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
 
-  // Second hash: sha256(username + firstBase64 + token) -> hex string -> base64
-  const secondInput = username + firstBase64 + token;
-  const secondHash = crypto.createHash("sha256").update(secondInput, "utf8").digest("hex");
-  // Again, base64 encode the hex string directly (as ASCII bytes)
-  const finalBase64 = Buffer.from(secondHash, "ascii").toString("base64");
+  // Concatenate: username + base64(passwordHash) + token
+  const base64PasswordHash = Buffer.from(passwordHash).toString('base64');
+  const combined = modemUsername + base64PasswordHash + token;
 
-  console.log(`🔐 Encoding password for user: ${username}`);
-  console.log(`   Token: ${token.substring(0, 20)}...`);
+  // SHA256 hash of combined
+  const finalHash = crypto.createHash('sha256').update(combined).digest('hex');
 
-  return finalBase64;
+  // Base64 encode
+  return Buffer.from(finalHash).toString('base64');
 }
 
 /**
- * Get login state and password type from modem
+ * Login to modem
  */
-async function getLoginState(): Promise<{ state: number; passwordType: number }> {
+export async function login(username?: string, password?: string): Promise<boolean> {
   try {
+    if (username) modemUsername = username;
+    if (password) modemPassword = password;
+
     const { token, session } = await getToken();
-    const res = await axios.get(`${getBaseURL()}/user/state-login`, {
-      timeout: 10000,
+
+    // Check login state
+    const stateRes = await axios.get(`${getBaseURL()}/user/state-login`, {
       headers: { Cookie: session },
+      timeout: 10000,
     });
 
-    const xmlData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-    const state = parseInt(parseXMLValue(xmlData, "State")) || 0;
-    const passwordType = parseInt(parseXMLValue(xmlData, "password_type")) || 4;
+    const passwordType = parseXMLValue(stateRes.data, "password_type") || "4";
 
-    return { state, passwordType };
-  } catch (error) {
-    // Default to password type 4 (SHA256)
-    return { state: -1, passwordType: 4 };
-  }
-}
+    // Encode password
+    const encodedPassword = encodePassword(modemPassword, token);
 
-/**
- * Login to Huawei B312
- */
-export async function login(username: string, password: string): Promise<boolean> {
-  try {
-    // Check login state first
-    const loginState = await getLoginState();
-    console.log(`📡 Login state: ${loginState.state}, Password type: ${loginState.passwordType}`);
-
-    // If already logged in, return success
-    if (loginState.state === 0) {
-      console.log("✅ Already logged in");
-      return true;
-    }
-
-    // Get fresh token and session for login
-    const { token, session } = await getToken();
-
-    const encodedPassword = encodePassword(username, password, token);
-
+    // Login
     const loginXML = `<?xml version="1.0" encoding="UTF-8"?>
 <request>
-  <Username>${username}</Username>
+  <Username>${modemUsername}</Username>
   <Password>${encodedPassword}</Password>
-  <password_type>${loginState.passwordType}</password_type>
+  <password_type>${passwordType}</password_type>
 </request>`;
 
-    // Include session cookie to fix error 125003
-    const headers = {
-      __RequestVerificationToken: token,
-      "Content-Type": "application/xml",
-      Cookie: session,
-    };
-
-    const res = await axios.post(`${getBaseURL()}/user/login`, loginXML, {
-      headers,
+    const loginRes = await axios.post(`${getBaseURL()}/user/login`, loginXML, {
+      headers: {
+        __RequestVerificationToken: token,
+        "Content-Type": "application/xml",
+        Cookie: session,
+      },
       timeout: 10000,
+      validateStatus: () => true,
     });
 
-    const responseText = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-
-    console.log("Login response:", responseText.substring(0, 200));
-
-    // Check if login successful
-    if (responseText.includes("<response>OK</response>") || responseText.includes("OK")) {
-      // Try to get new session from Set-Cookie header
-      const setCookie = res.headers['set-cookie'];
+    if (loginRes.data.includes("<response>OK</response>")) {
+      // Save session from response cookie
+      const setCookie = loginRes.headers['set-cookie'];
       if (setCookie && setCookie.length > 0) {
-        // Extract SessionID from Set-Cookie
         const sessionCookie = setCookie.find((c: string) => c.includes('SessionID'));
         if (sessionCookie) {
-          // Parse the cookie value (format: SessionID=xxx; path=/; HttpOnly)
           const match = sessionCookie.match(/SessionID=([^;]+)/);
           if (match) {
             currentSession = `SessionID=${match[1]}`;
-            console.log("✅ Login successful, new session from Set-Cookie saved");
-            return true;
           }
         }
       }
 
-      // Fallback: use the session we sent (might work for some modems)
-      currentSession = session;
-      console.log("✅ Login successful, session saved (fallback)");
+      if (!currentSession) {
+        currentSession = session;
+      }
+
+      // Save token from response headers - this token matches our session!
+      const respToken = loginRes.headers['__requestverificationtoken'];
+      if (respToken) {
+        currentToken = respToken;
+        console.log("✅ Login successful, got new token from response");
+      } else {
+        // Use the original token if no new one in response
+        currentToken = token;
+        console.log("✅ Login successful");
+      }
+
       return true;
     }
 
-    // Check for error
-    const errorCode = parseXMLValue(responseText, "code");
-    const waitTime = parseXMLValue(responseText, "waittime");
-
-    if (errorCode) {
-      const errorMessages: Record<string, string> = {
-        "108001": "Username salah",
-        "108002": "Password salah",
-        "108003": "Sudah login di tempat lain",
-        "108006": "Username atau password salah",
-        "108007": `Terlalu banyak percobaan gagal. Tunggu ${waitTime || "beberapa"} menit`,
-        "125003": "Session token tidak valid",
-      };
-      const message = errorMessages[errorCode] || `Error code: ${errorCode}`;
-      console.log(`❌ Login error: ${message}`);
-    }
-
+    const errorCode = parseXMLValue(loginRes.data, "code");
+    console.log(`❌ Login failed: ${errorCode}`);
     return false;
   } catch (error: any) {
-    console.error("Error during login:", error.message);
+    console.error("Login error:", error.message);
     return false;
   }
 }
 
 /**
- * Change IP by triggering PLMN list scan
- * Based on working hmonn Python script: client.net.plmn_list() triggers IP change
+ * Auto-login with saved credentials
+ */
+export async function autoLogin(): Promise<boolean> {
+  const savedConfig = await getModemConfig();
+  if (savedConfig) {
+    if (savedConfig.ip) modemIP = savedConfig.ip;
+    if (savedConfig.username) modemUsername = savedConfig.username;
+    if (savedConfig.password) modemPassword = savedConfig.password;
+    console.log(`📂 Using saved credentials for user: ${modemUsername}`);
+  }
+  return login();
+}
+
+/**
+ * Get WAN IP and device info
+ */
+export async function getWanIP(): Promise<ModemInfo> {
+  try {
+    // Try without auth first
+    const res = await axios.get(`${getBaseURL()}/device/information`, {
+      timeout: 10000,
+      validateStatus: () => true,
+    });
+
+    if (res.data.includes("<error>")) {
+      return {
+        name: "Huawei Modem",
+        wan_ip: "Login Required",
+      };
+    }
+
+    return {
+      name: parseXMLValue(res.data, "DeviceName") || "Huawei Modem",
+      wan_ip: parseXMLValue(res.data, "WanIPAddress") || "Unknown",
+    };
+  } catch (error: any) {
+    return {
+      name: "Huawei Modem",
+      wan_ip: "Error: " + error.message,
+    };
+  }
+}
+
+/**
+ * Get WAN IP with authentication
+ */
+export async function getWanIPWithAuth(): Promise<ModemInfo> {
+  try {
+    // Ensure we're logged in
+    if (!currentSession) {
+      await autoLogin();
+    }
+
+    const { token } = await getToken();
+
+    const res = await axios.get(`${getBaseURL()}/device/information`, {
+      headers: {
+        Cookie: currentSession || "",
+        __RequestVerificationToken: token,
+      },
+      timeout: 10000,
+      validateStatus: () => true,
+    });
+
+    if (res.data.includes("<error>")) {
+      // Try re-login
+      currentSession = null;
+      await autoLogin();
+      return getWanIPWithAuth();
+    }
+
+    console.log("✅ Got WAN IP from /device/information");
+    return {
+      name: parseXMLValue(res.data, "DeviceName") || "Huawei Modem",
+      wan_ip: parseXMLValue(res.data, "WanIPAddress") || "Unknown",
+    };
+  } catch (error: any) {
+    return {
+      name: "Huawei Modem",
+      wan_ip: "Error: " + error.message,
+    };
+  }
+}
+
+/**
+ * Check modem connection
+ */
+export async function checkConnection(): Promise<boolean> {
+  try {
+    await axios.get(`${getBaseURL()}/monitoring/traffic-statistics`, { timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get network info (provider)
+ */
+export async function getNetworkInfo(): Promise<{ provider: string }> {
+  try {
+    if (!currentSession) await autoLogin();
+    const { token } = await getToken();
+
+    const res = await axios.get(`${getBaseURL()}/net/current-plmn`, {
+      headers: {
+        Cookie: currentSession || "",
+        __RequestVerificationToken: token,
+      },
+      timeout: 10000,
+    });
+
+    return {
+      provider: parseXMLValue(res.data, "FullName") ||
+        parseXMLValue(res.data, "ShortName") ||
+        "Unknown",
+    };
+  } catch {
+    return { provider: "Unknown" };
+  }
+}
+
+/**
+ * Get traffic statistics
+ */
+export async function getTrafficStats(): Promise<{
+  currentDownload: number;
+  currentUpload: number;
+  totalDownload: number;
+  totalUpload: number;
+  dataUsage: string;
+}> {
+  try {
+    if (!currentSession) await autoLogin();
+    const { token } = await getToken();
+
+    const res = await axios.get(`${getBaseURL()}/monitoring/traffic-statistics`, {
+      headers: {
+        Cookie: currentSession || "",
+        __RequestVerificationToken: token,
+      },
+      timeout: 10000,
+    });
+
+    const totalDownload = parseInt(parseXMLValue(res.data, "TotalDownload")) || 0;
+    const totalUpload = parseInt(parseXMLValue(res.data, "TotalUpload")) || 0;
+    const currentDownload = parseInt(parseXMLValue(res.data, "CurrentDownloadRate")) || 0;
+    const currentUpload = parseInt(parseXMLValue(res.data, "CurrentUploadRate")) || 0;
+
+    return {
+      currentDownload,
+      currentUpload,
+      totalDownload,
+      totalUpload,
+      dataUsage: `⬇️ ${formatBytes(totalDownload)} / ⬆️ ${formatBytes(totalUpload)}`,
+    };
+  } catch {
+    return {
+      currentDownload: 0,
+      currentUpload: 0,
+      totalDownload: 0,
+      totalUpload: 0,
+      dataUsage: "N/A",
+    };
+  }
+}
+
+/**
+ * Get signal info
+ */
+export async function getSignalInfo(): Promise<{
+  rssi: string;
+  rsrp: string;
+  rsrq: string;
+  sinr: string;
+  signalStrength: string;
+}> {
+  try {
+    if (!currentSession) await autoLogin();
+    const { token } = await getToken();
+
+    const res = await axios.get(`${getBaseURL()}/device/signal`, {
+      headers: {
+        Cookie: currentSession || "",
+        __RequestVerificationToken: token,
+      },
+      timeout: 10000,
+    });
+
+    const rssi = parseXMLValue(res.data, "rssi") || "N/A";
+    const rsrp = parseXMLValue(res.data, "rsrp") || "N/A";
+    const rsrq = parseXMLValue(res.data, "rsrq") || "N/A";
+    const sinr = parseXMLValue(res.data, "sinr") || "N/A";
+
+    let signalStrength = "N/A";
+    const rssiNum = parseInt(rssi.replace("dBm", "").trim());
+    if (!isNaN(rssiNum)) {
+      if (rssiNum >= -65) signalStrength = "📶 Sangat Bagus";
+      else if (rssiNum >= -75) signalStrength = "📶 Bagus";
+      else if (rssiNum >= -85) signalStrength = "📶 Cukup";
+      else if (rssiNum >= -95) signalStrength = "📶 Lemah";
+      else signalStrength = "📶 Sangat Lemah";
+    }
+
+    return { rssi, rsrp, rsrq, sinr, signalStrength };
+  } catch {
+    return { rssi: "N/A", rsrp: "N/A", rsrq: "N/A", sinr: "N/A", signalStrength: "N/A" };
+  }
+}
+
+/**
+ * Get monthly statistics
+ */
+export async function getMonthStats(): Promise<{
+  currentMonthDownload: number;
+  currentMonthUpload: number;
+  monthUsage: string;
+}> {
+  try {
+    if (!currentSession) await autoLogin();
+    const { token } = await getToken();
+
+    const res = await axios.get(`${getBaseURL()}/monitoring/month_statistics`, {
+      headers: {
+        Cookie: currentSession || "",
+        __RequestVerificationToken: token,
+      },
+      timeout: 10000,
+    });
+
+    const currentMonthDownload = parseInt(parseXMLValue(res.data, "CurrentMonthDownload")) || 0;
+    const currentMonthUpload = parseInt(parseXMLValue(res.data, "CurrentMonthUpload")) || 0;
+
+    return {
+      currentMonthDownload,
+      currentMonthUpload,
+      monthUsage: formatBytes(currentMonthDownload + currentMonthUpload),
+    };
+  } catch {
+    return { currentMonthDownload: 0, currentMonthUpload: 0, monthUsage: "N/A" };
+  }
+}
+
+/**
+ * Get full modem info
+ */
+export async function getFullModemInfo(): Promise<ModemInfo> {
+  try {
+    if (!currentSession) await autoLogin();
+
+    const [wanInfo, networkInfo, trafficStats] = await Promise.all([
+      getWanIPWithAuth(),
+      getNetworkInfo(),
+      getTrafficStats(),
+    ]);
+
+    return {
+      ...wanInfo,
+      provider: networkInfo.provider,
+      dataUsage: trafficStats.dataUsage,
+      totalDownload: trafficStats.totalDownload,
+      totalUpload: trafficStats.totalUpload,
+    };
+  } catch (error: any) {
+    return {
+      name: "Huawei Modem",
+      wan_ip: "Error: " + error.message,
+    };
+  }
+}
+
+/**
+ * Get detailed modem info
+ */
+export async function getDetailedModemInfo(): Promise<{
+  deviceName: string;
+  wanIP: string;
+  provider: string;
+  signalStrength: string;
+  rssi: string;
+  totalDownload: string;
+  totalUpload: string;
+  monthUsage: string;
+}> {
+  try {
+    if (!currentSession) await autoLogin();
+
+    const [wanInfo, networkInfo, signalInfo, trafficStats, monthStats] = await Promise.all([
+      getWanIPWithAuth(),
+      getNetworkInfo(),
+      getSignalInfo(),
+      getTrafficStats(),
+      getMonthStats(),
+    ]);
+
+    return {
+      deviceName: wanInfo.name,
+      wanIP: wanInfo.wan_ip,
+      provider: networkInfo.provider,
+      signalStrength: signalInfo.signalStrength,
+      rssi: signalInfo.rssi,
+      totalDownload: formatBytes(trafficStats.totalDownload),
+      totalUpload: formatBytes(trafficStats.totalUpload),
+      monthUsage: monthStats.monthUsage,
+    };
+  } catch {
+    return {
+      deviceName: "Huawei Modem",
+      wanIP: "Error",
+      provider: "Unknown",
+      signalStrength: "N/A",
+      rssi: "N/A",
+      totalDownload: "N/A",
+      totalUpload: "N/A",
+      monthUsage: "N/A",
+    };
+  }
+}
+
+/**
+ * Change IP by forcing network re-registration
+ * Uses token saved from login for POST requests
  */
 export async function changeIP(): Promise<ModemInfo> {
   try {
@@ -337,52 +544,105 @@ export async function changeIP(): Promise<ModemInfo> {
     const oldIP = oldInfo.wan_ip;
     console.log("Old IP:", oldIP);
 
-    // Ensure we're logged in
-    if (!currentSession) {
-      console.log("No session found, attempting auto-login...");
-      const loginSuccess = await autoLogin();
-      if (!loginSuccess) {
-        throw new Error("Login diperlukan untuk mengganti IP.");
-      }
+    // Force fresh login to get synchronized token+session
+    console.log("Getting fresh login session...");
+    currentSession = null;
+    currentToken = null;
+    const loginSuccess = await autoLogin();
+    if (!loginSuccess) {
+      throw new Error("Login required");
     }
 
-    // Get fresh token+session pair
-    const { token, session } = await getToken();
+    // Use the token saved from login
+    if (!currentToken || !currentSession) {
+      throw new Error("No valid token/session after login");
+    }
+    let postToken: string = currentToken;
+    const postSession: string = currentSession;
 
-    const headers: Record<string, string> = {
-      __RequestVerificationToken: token,
-      "X-Requested-With": "XMLHttpRequest",
-      Cookie: session,
-    };
+    console.log("Token for POST:", postToken.substring(0, 20) + "...");
+    console.log("Session:", postSession.substring(0, 30) + "...");
 
-    // Trigger IP change by calling plmn-list (same as Python script: client.net.plmn_list())
-    console.log("🔁 Sending IP change request to modem (plmn-list)...");
+    // Disconnect via dialup/dial
+    console.log("Disconnecting PPP connection...");
 
-    const plmnRes = await axios.get(`${getBaseURL()}/net/plmn-list`, {
-      headers,
-      timeout: 30000, // PLMN scan takes time
+    const dialDisconnectXML = `<?xml version="1.0" encoding="UTF-8"?>
+<request>
+  <Action>0</Action>
+</request>`;
+
+    const dialDisconnectRes = await axios.post(`${getBaseURL()}/dialup/dial`, dialDisconnectXML, {
+      headers: {
+        __RequestVerificationToken: postToken,
+        "Content-Type": "application/xml",
+        Cookie: postSession,
+      },
+      timeout: 15000,
       validateStatus: () => true,
     });
 
-    const plmnData = typeof plmnRes.data === 'string' ? plmnRes.data : JSON.stringify(plmnRes.data);
-    console.log("PLMN response:", plmnData.substring(0, 200));
+    const disconnectData = dialDisconnectRes.data;
+    console.log("Disconnect response:", disconnectData.substring(0, 150));
 
-    // Check for auth errors
-    if (plmnData.includes("125002") || plmnData.includes("125003")) {
-      console.log("Auth error, attempting re-login...");
-      currentSession = null;
-      const loginSuccess = await autoLogin();
-      if (!loginSuccess) {
-        throw new Error("Gagal login. Silakan coba lagi.");
-      }
-      return await changeIP();
+    // Check response and save new token if provided
+    const disconnectRespToken = dialDisconnectRes.headers['__requestverificationtoken'];
+    if (disconnectRespToken) {
+      postToken = String(disconnectRespToken);
+      console.log("Got new token from disconnect response");
     }
 
-    // Wait for new IP to be assigned
-    console.log("Waiting for new IP...");
-    await sleep(10000); // Wait 10 seconds for IP change
+    if (disconnectData.includes("<response>OK</response>")) {
+      console.log("✅ Disconnect successful");
+    } else {
+      console.log("⚠️ Disconnect may have failed, continuing anyway...");
+    }
 
-    // Get new IP
+    // Wait for disconnect
+    await sleep(5000);
+
+    // Reconnect - re-login to get fresh token
+    console.log("Reconnecting PPP connection...");
+    currentSession = null;
+    currentToken = null;
+    await autoLogin();
+
+    if (!currentToken || !currentSession) {
+      throw new Error("Re-login failed");
+    }
+    postToken = currentToken;
+
+    const dialConnectXML = `<?xml version="1.0" encoding="UTF-8"?>
+<request>
+  <Action>1</Action>
+</request>`;
+
+    const dialConnectRes = await axios.post(`${getBaseURL()}/dialup/dial`, dialConnectXML, {
+      headers: {
+        __RequestVerificationToken: postToken,
+        "Content-Type": "application/xml",
+        Cookie: currentSession || "",
+      },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+
+    const connectData = dialConnectRes.data;
+    console.log("Reconnect response:", connectData.substring(0, 150));
+
+    if (connectData.includes("<response>OK</response>")) {
+      console.log("✅ Reconnect successful");
+    } else {
+      console.log("⚠️ Reconnect may have failed");
+    }
+
+    console.log("Waiting for new IP assignment...");
+    await sleep(10000);
+
+    // Force re-login and get new IP
+    currentSession = null;
+    currentToken = null;
+    await autoLogin();
+
     const newInfo = await getWanIPWithAuth();
 
     newInfo.timestamp = new Date().toLocaleString("id-ID", {
@@ -398,332 +658,16 @@ export async function changeIP(): Promise<ModemInfo> {
     console.log("  Old IP:", oldIP);
     console.log("  New IP:", newInfo.wan_ip);
 
+    if (oldIP === newInfo.wan_ip) {
+      console.log("⚠️ IP did not change. This may be normal - ISP may assign the same IP.");
+    } else {
+      console.log("✅ IP changed successfully!");
+    }
+
     return newInfo;
   } catch (error: any) {
     console.error("Error changing IP:", error.message);
-    throw new Error("Gagal mengganti IP. " + (error.message || "Coba lagi."));
+    throw new Error("Gagal mengganti IP: " + error.message);
   }
 }
 
-/**
- * Check modem connection status
- */
-export async function checkConnection(): Promise<boolean> {
-  try {
-    await axios.get(`${getBaseURL()}/monitoring/traffic-statistics`, {
-      timeout: 5000,
-    });
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
-/**
- * Auto-login with saved credentials
- * Priority: 1. Saved config (from Setup Modem) 2. Environment variables 3. Defaults
- */
-export async function autoLogin(): Promise<boolean> {
-  // Try to get saved config from storage first
-  const savedConfig = await getModemConfig();
-
-  let username: string;
-  let password: string;
-
-  if (savedConfig?.username && savedConfig?.password) {
-    // Use saved config from Setup Modem
-    username = savedConfig.username;
-    password = savedConfig.password;
-    console.log(`📂 Using saved credentials for user: ${username}`);
-  } else {
-    // Fall back to environment variables
-    username = modemUsername;
-    password = modemPassword;
-    console.log(`🔧 Using env credentials for user: ${username}`);
-  }
-
-  try {
-    return await login(username, password);
-  } catch (error) {
-    console.error("Auto-login failed:", error);
-    return false;
-  }
-}
-
-/**
- * Get WAN IP with auto-login if needed
- */
-export async function getWanIPWithAuth(): Promise<ModemInfo> {
-  let info = await getWanIP();
-
-  // If login required, try auto-login (but don't fail if it doesn't work)
-  if (info.wan_ip === "Login Required") {
-    console.log("🔐 Login required for full status");
-    console.log("📝 Note: Some features may require manual login through the web interface");
-
-    // Try auto-login but don't block if it fails
-    try {
-      const loginSuccess = await autoLogin();
-      if (loginSuccess) {
-        console.log("✅ Auto-login successful");
-        await sleep(1000);
-        info = await getWanIP();
-      }
-    } catch (error) {
-      // Silently fail - user can still use reconnect features
-      console.log("💡 Tip: Login via web interface (192.168.8.1) or use Konfigurasi menu");
-    }
-  }
-
-  return info;
-}
-
-/**
- * Format bytes to human readable format
- */
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-/**
- * Get network/provider info from Huawei B312
- */
-export async function getNetworkInfo(): Promise<{ provider: string; networkType?: string }> {
-  try {
-    const headers: Record<string, string> = {};
-    if (currentSession) {
-      headers.Cookie = currentSession;
-    }
-
-    const res = await axios.get(`${getBaseURL()}/net/current-plmn`, {
-      timeout: 10000,
-      headers,
-    });
-
-    const xmlData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-
-    // Check for error
-    const errorCode = parseXMLValue(xmlData, "code");
-    if (errorCode) {
-      return { provider: "Unknown" };
-    }
-
-    const fullName = parseXMLValue(xmlData, "FullName") || parseXMLValue(xmlData, "ShortName") || "Unknown";
-    const networkType = parseXMLValue(xmlData, "Rat");
-
-    return {
-      provider: fullName,
-      networkType: networkType === "4" ? "4G LTE" : networkType === "3" ? "3G" : networkType === "2" ? "2G" : undefined
-    };
-  } catch (error) {
-    console.error("Error getting network info:", error);
-    return { provider: "Unknown" };
-  }
-}
-
-/**
- * Get traffic statistics from Huawei B312
- */
-export async function getTrafficStats(): Promise<{
-  currentDownload: number;
-  currentUpload: number;
-  totalDownload: number;
-  totalUpload: number;
-  dataUsage: string;
-}> {
-  try {
-    const headers: Record<string, string> = {};
-    if (currentSession) {
-      headers.Cookie = currentSession;
-    }
-
-    const res = await axios.get(`${getBaseURL()}/monitoring/traffic-statistics`, {
-      timeout: 10000,
-      headers,
-    });
-
-    const xmlData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-
-    // Check for error
-    const errorCode = parseXMLValue(xmlData, "code");
-    if (errorCode) {
-      return {
-        currentDownload: 0,
-        currentUpload: 0,
-        totalDownload: 0,
-        totalUpload: 0,
-        dataUsage: "N/A"
-      };
-    }
-
-    const currentDownload = parseInt(parseXMLValue(xmlData, "CurrentDownload")) || 0;
-    const currentUpload = parseInt(parseXMLValue(xmlData, "CurrentUpload")) || 0;
-    const totalDownload = parseInt(parseXMLValue(xmlData, "TotalDownload")) || 0;
-    const totalUpload = parseInt(parseXMLValue(xmlData, "TotalUpload")) || 0;
-
-    const totalUsage = totalDownload + totalUpload;
-    const dataUsage = `⬇️ ${formatBytes(totalDownload)} / ⬆️ ${formatBytes(totalUpload)}`;
-
-    return {
-      currentDownload,
-      currentUpload,
-      totalDownload,
-      totalUpload,
-      dataUsage
-    };
-  } catch (error) {
-    console.error("Error getting traffic stats:", error);
-    return {
-      currentDownload: 0,
-      currentUpload: 0,
-      totalDownload: 0,
-      totalUpload: 0,
-      dataUsage: "N/A"
-    };
-  }
-}
-
-/**
- * Get full modem info including provider and data usage
- */
-export async function getFullModemInfo(): Promise<ModemInfo> {
-  const [wanInfo, networkInfo, trafficStats] = await Promise.all([
-    getWanIPWithAuth(),
-    getNetworkInfo(),
-    getTrafficStats()
-  ]);
-
-  return {
-    ...wanInfo,
-    provider: networkInfo.provider,
-    dataUsage: trafficStats.dataUsage,
-    totalDownload: trafficStats.totalDownload,
-    totalUpload: trafficStats.totalUpload
-  };
-}
-
-/**
- * Get signal info from Huawei B312
- */
-export async function getSignalInfo(): Promise<{
-  rssi: string;
-  rsrp: string;
-  rsrq: string;
-  sinr: string;
-  signalStrength: string;
-}> {
-  try {
-    const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
-    if (currentSession) {
-      headers.Cookie = currentSession;
-    }
-
-    const res = await axios.get(`${getBaseURL()}/device/signal`, {
-      timeout: 10000,
-      headers,
-    });
-
-    const xmlData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-    const errorCode = parseXMLValue(xmlData, "code");
-
-    if (errorCode) {
-      return { rssi: "N/A", rsrp: "N/A", rsrq: "N/A", sinr: "N/A", signalStrength: "N/A" };
-    }
-
-    const rssi = parseXMLValue(xmlData, "rssi") || "N/A";
-    const rsrp = parseXMLValue(xmlData, "rsrp") || "N/A";
-    const rsrq = parseXMLValue(xmlData, "rsrq") || "N/A";
-    const sinr = parseXMLValue(xmlData, "sinr") || "N/A";
-
-    // Calculate signal strength (simplified)
-    let signalStrength = "N/A";
-    const rssiNum = parseInt(rssi.replace("dBm", "").trim());
-    if (!isNaN(rssiNum)) {
-      if (rssiNum >= -65) signalStrength = "📶 Sangat Bagus";
-      else if (rssiNum >= -75) signalStrength = "📶 Bagus";
-      else if (rssiNum >= -85) signalStrength = "📶 Cukup";
-      else if (rssiNum >= -95) signalStrength = "📶 Lemah";
-      else signalStrength = "📶 Sangat Lemah";
-    }
-
-    return { rssi, rsrp, rsrq, sinr, signalStrength };
-  } catch (error) {
-    console.error("Error getting signal info:", error);
-    return { rssi: "N/A", rsrp: "N/A", rsrq: "N/A", sinr: "N/A", signalStrength: "N/A" };
-  }
-}
-
-/**
- * Get monthly statistics from Huawei B312
- */
-export async function getMonthStats(): Promise<{
-  currentMonthDownload: number;
-  currentMonthUpload: number;
-  monthUsage: string;
-}> {
-  try {
-    const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
-    if (currentSession) {
-      headers.Cookie = currentSession;
-    }
-
-    const res = await axios.get(`${getBaseURL()}/monitoring/month_statistics`, {
-      timeout: 10000,
-      headers,
-    });
-
-    const xmlData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-    const errorCode = parseXMLValue(xmlData, "code");
-
-    if (errorCode) {
-      return { currentMonthDownload: 0, currentMonthUpload: 0, monthUsage: "N/A" };
-    }
-
-    const currentMonthDownload = parseInt(parseXMLValue(xmlData, "CurrentMonthDownload")) || 0;
-    const currentMonthUpload = parseInt(parseXMLValue(xmlData, "CurrentMonthUpload")) || 0;
-    const totalMonth = currentMonthDownload + currentMonthUpload;
-    const monthUsage = formatBytes(totalMonth);
-
-    return { currentMonthDownload, currentMonthUpload, monthUsage };
-  } catch (error) {
-    console.error("Error getting month stats:", error);
-    return { currentMonthDownload: 0, currentMonthUpload: 0, monthUsage: "N/A" };
-  }
-}
-
-/**
- * Get detailed modem info for the detail view
- */
-export async function getDetailedModemInfo(): Promise<{
-  deviceName: string;
-  wanIP: string;
-  provider: string;
-  signalStrength: string;
-  rssi: string;
-  totalDownload: string;
-  totalUpload: string;
-  monthUsage: string;
-}> {
-  const [wanInfo, networkInfo, signalInfo, trafficStats, monthStats] = await Promise.all([
-    getWanIPWithAuth(),
-    getNetworkInfo(),
-    getSignalInfo(),
-    getTrafficStats(),
-    getMonthStats()
-  ]);
-
-  return {
-    deviceName: wanInfo.name,
-    wanIP: wanInfo.wan_ip,
-    provider: networkInfo.provider,
-    signalStrength: signalInfo.signalStrength,
-    rssi: signalInfo.rssi,
-    totalDownload: formatBytes(trafficStats.totalDownload),
-    totalUpload: formatBytes(trafficStats.totalUpload),
-    monthUsage: monthStats.monthUsage
-  };
-}
