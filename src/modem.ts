@@ -325,69 +325,66 @@ export async function login(username: string, password: string): Promise<boolean
 }
 
 /**
- * Change IP by disconnecting and reconnecting mobile data
+ * Change IP by triggering PLMN list scan
+ * Based on working hmonn Python script: client.net.plmn_list() triggers IP change
  */
 export async function changeIP(): Promise<ModemInfo> {
   try {
     console.log("Starting IP change process...");
 
-    // Get token
-    const { token } = await getToken();
+    // Get old IP first
+    const oldInfo = await getWanIPWithAuth();
+    const oldIP = oldInfo.wan_ip;
+    console.log("Old IP:", oldIP);
 
-    const headers = {
+    // Ensure we're logged in
+    if (!currentSession) {
+      console.log("No session found, attempting auto-login...");
+      const loginSuccess = await autoLogin();
+      if (!loginSuccess) {
+        throw new Error("Login diperlukan untuk mengganti IP.");
+      }
+    }
+
+    // Get fresh token+session pair
+    const { token, session } = await getToken();
+
+    const headers: Record<string, string> = {
       __RequestVerificationToken: token,
-      "Content-Type": "application/xml",
+      "X-Requested-With": "XMLHttpRequest",
+      Cookie: session,
     };
 
-    // Disconnect
-    console.log("Disconnecting mobile data...");
-    const disconnectXML = `<?xml version="1.0" encoding="UTF-8"?>
-<request>
-  <dataswitch>0</dataswitch>
-</request>`;
+    // Trigger IP change by calling plmn-list (same as Python script: client.net.plmn_list())
+    console.log("🔁 Sending IP change request to modem (plmn-list)...");
 
-    const disconnectRes = await axios.post(`${getBaseURL()}/dialup/mobile-dataswitch`, disconnectXML, {
+    const plmnRes = await axios.get(`${getBaseURL()}/net/plmn-list`, {
       headers,
-      timeout: 15000,
-      validateStatus: () => true, // Accept any status
+      timeout: 30000, // PLMN scan takes time
+      validateStatus: () => true,
     });
 
-    console.log("Disconnect response:", typeof disconnectRes.data === 'string' ? disconnectRes.data.substring(0, 100) : disconnectRes.status);
+    const plmnData = typeof plmnRes.data === 'string' ? plmnRes.data : JSON.stringify(plmnRes.data);
+    console.log("PLMN response:", plmnData.substring(0, 200));
 
-    // Wait for disconnect to complete
-    await sleep(3000);
-
-    // Get new token for connect request
-    const { token: newToken } = await getToken();
-
-    const newHeaders = {
-      __RequestVerificationToken: newToken,
-      "Content-Type": "application/xml",
-    };
-
-    // Connect
-    console.log("Reconnecting mobile data...");
-    const connectXML = `<?xml version="1.0" encoding="UTF-8"?>
-<request>
-  <dataswitch>1</dataswitch>
-</request>`;
-
-    const connectRes = await axios.post(`${getBaseURL()}/dialup/mobile-dataswitch`, connectXML, {
-      headers: newHeaders,
-      timeout: 15000,
-      validateStatus: () => true, // Accept any status
-    });
-
-    console.log("Connect response:", typeof connectRes.data === 'string' ? connectRes.data.substring(0, 100) : connectRes.status);
+    // Check for auth errors
+    if (plmnData.includes("125002") || plmnData.includes("125003")) {
+      console.log("Auth error, attempting re-login...");
+      currentSession = null;
+      const loginSuccess = await autoLogin();
+      if (!loginSuccess) {
+        throw new Error("Gagal login. Silakan coba lagi.");
+      }
+      return await changeIP();
+    }
 
     // Wait for new IP to be assigned
     console.log("Waiting for new IP...");
-    await sleep(5000);
+    await sleep(10000); // Wait 10 seconds for IP change
 
     // Get new IP
     const newInfo = await getWanIPWithAuth();
 
-    // Add timestamp
     newInfo.timestamp = new Date().toLocaleString("id-ID", {
       year: "numeric",
       month: "2-digit",
@@ -397,12 +394,14 @@ export async function changeIP(): Promise<ModemInfo> {
       second: "2-digit",
     });
 
-    console.log("IP change completed:", newInfo.wan_ip);
+    console.log("IP change completed:");
+    console.log("  Old IP:", oldIP);
+    console.log("  New IP:", newInfo.wan_ip);
 
     return newInfo;
   } catch (error: any) {
     console.error("Error changing IP:", error.message);
-    throw new Error("Gagal mengganti IP. " + (error.message || "Coba lagi dalam beberapa saat."));
+    throw new Error("Gagal mengganti IP. " + (error.message || "Coba lagi."));
   }
 }
 
