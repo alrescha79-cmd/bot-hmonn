@@ -15,9 +15,9 @@ Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara
 | 🔄 **Ganti IP WAN** | Disconnect/reconnect modem untuk mendapatkan IP baru |
 | 📊 **Detail Modem** | Informasi lengkap: IP, Provider, Sinyal, Pemakaian Data |
 | 📶 **Kualitas Sinyal** | Monitor RSSI dan kekuatan sinyal real-time |
-| � **Statistik Data** | Total unduhan, unggahan, dan pemakaian bulanan |
+| 📈 **Statistik Data** | Total unduhan, unggahan, dan pemakaian bulanan |
 | ⚙️ **Konfigurasi Dinamis** | Setup IP, username, password via bot |
-| 🔐 **Auto-Login** | Login otomatis dengan session management |
+| 🔐 **Auto-Login** | Login otomatis dengan session & token management |
 | 💾 **Penyimpanan Lokal** | Simpan konfigurasi dan timestamp perubahan IP |
 | 🛡️ **Error Handling** | Fallback graceful jika modem offline |
 
@@ -35,7 +35,7 @@ Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara
 
 🏷️ Perangkat: B312-926
 🌐 Alamat IP: 10.40.18.12
-� Operator: Telkomsel
+📶 Operator: Telkomsel
 📊 Pemakaian: ⬇️ 2.93 GB / ⬆️ 416 MB
 🕐 IP Terakhir Diubah: 13/12/2024, 12:30
 
@@ -138,7 +138,7 @@ bun run start
 
 ---
 
-## � API Endpoints (Huawei B312)
+## 📡 API Endpoints (Huawei B312)
 
 Bot ini menggunakan Huawei HiLink API:
 
@@ -150,6 +150,7 @@ Bot ini menggunakan Huawei HiLink API:
 | `/api/monitoring/traffic-statistics` | Total upload/download |
 | `/api/monitoring/month_statistics` | Statistik bulanan |
 | `/api/user/login` | Autentikasi |
+| `/api/dialup/dial` | Disconnect/reconnect PPP |
 | `/api/dialup/mobile-dataswitch` | On/off koneksi data |
 
 ---
@@ -166,8 +167,7 @@ bot-hmonn/
 ├── docs/              # Dokumentasi
 ├── .env               # Konfigurasi (tidak di-git)
 ├── bot.sh             # Script kontrol
-├── test.ts            # Test koneksi
-└── utils.ts           # CLI utilities
+└── storage.json       # Data persisten
 ```
 
 ---
@@ -175,15 +175,6 @@ bot-hmonn/
 ## 🧪 CLI Tools
 
 ```bash
-# Test koneksi modem
-bun test.ts
-
-# CLI utilities
-bun utils.ts ip        # Lihat IP saat ini
-bun utils.ts change    # Ganti IP
-bun utils.ts status    # Cek status
-bun utils.ts login admin password  # Login
-
 # Kontrol bot
 ./bot.sh start         # Jalankan bot
 ./bot.sh stop          # Hentikan bot
@@ -198,7 +189,7 @@ bun utils.ts login admin password  # Login
 
 - ✅ Token bot disimpan di `.env` (tidak di-commit ke git)
 - ✅ Password di-encode dengan SHA256 + Base64
-- ✅ Session management dengan cookie
+- ✅ Session & token management dari response headers
 - ✅ Penyimpanan lokal (tanpa database eksternal)
 - ✅ Konfigurasi `.gitignore` yang proper
 
@@ -209,10 +200,19 @@ bun utils.ts login admin password  # Login
 | Masalah | Solusi |
 |---------|--------|
 | Bot tidak merespons | Cek: `./bot.sh status` dan `./bot.sh logs` |
-| Modem tidak terhubung | Test: `ping 192.168.8.1` dan `bun test.ts` |
-| Login error 125003 | Session token issue - bot akan retry otomatis |
+| Modem tidak terhubung | Test: `ping 192.168.8.1` |
+| Login error 125003 | Session token issue - tutup browser yang mengakses modem |
 | Login error 108006 | Password salah - cek konfigurasi |
-| IP tidak tampil | Klik Pengaturan → Konfigurasi Modem |
+| IP tidak berubah | Normal jika ISP memberikan IP "sticky" |
+
+### ⚠️ Catatan Penting tentang Ganti IP
+
+Fitur ganti IP bekerja dengan cara disconnect/reconnect koneksi PPP. Namun, **beberapa ISP memberikan IP yang sama** (sticky IP) meskipun sudah disconnect. Ini adalah perilaku normal dari ISP, bukan bug bot.
+
+Untuk memaksa IP berubah:
+1. Tunggu beberapa menit sebelum mencoba lagi
+2. Coba pada waktu berbeda (jam sibuk vs sepi)
+3. Beberapa ISP memerlukan modem restart fisik
 
 ---
 
@@ -221,7 +221,7 @@ bun utils.ts login admin password  # Login
 - **[Bun](https://bun.sh)** - JavaScript runtime yang cepat
 - **[TypeScript](https://www.typescriptlang.org/)** - Type safety
 - **[Telegraf](https://telegraf.js.org/)** - Telegram bot framework
-- **[Axios](https://axios-http.com/)** - HTTP client
+- **[Axios](https://axios-http.com/)** - HTTP client untuk Huawei API
 
 ---
 
