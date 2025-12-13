@@ -8,19 +8,31 @@ export function homeMenu(info: ModemInfo, username?: string): {
   text: string;
   reply_markup: InlineKeyboardMarkup;
 } {
-  const greeting = username ? `Halo @${username}` : "Halo";
-  
-  return {
-    text: `${greeting}
+  const greeting = username ? `👋 Selamat datang, *${username}*!` : "👋 Selamat datang!";
 
-Nama Modem: ${info.name}
-IP Sekarang: ${info.wan_ip}
-IP berubah: ${info.timestamp ?? "-"}`,
+  let statusText = `${greeting}
+
+━━━━━━━━━━━━━━━━━━━━
+📡 *INFORMASI MODEM*
+━━━━━━━━━━━━━━━━━━━━
+
+🏷️ Perangkat: *${info.name}*
+🌐 Alamat IP: \`${info.wan_ip}\`
+📶 Operator: *${info.provider || "-"}*
+📊 Pemakaian: ${info.dataUsage || "-"}
+🕐 IP Terakhir Diubah: ${info.timestamp ?? "_belum pernah_"}
+
+━━━━━━━━━━━━━━━━━━━━`;
+
+  return {
+    text: statusText,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🔧 Konfigurasi", callback_data: "cfg" }],
-        [{ text: "🔄 Ganti IP", callback_data: "chg_ip" }],
-        [{ text: "🔍 Cek Status", callback_data: "check_status" }],
+        [
+          { text: "🔄 Ganti IP", callback_data: "chg_ip" },
+          { text: "📊 Detail", callback_data: "check_status" },
+        ],
+        [{ text: "⚙️ Pengaturan", callback_data: "cfg" }],
       ],
     },
   };
@@ -34,14 +46,17 @@ export function configMenu(): {
   reply_markup: InlineKeyboardMarkup;
 } {
   return {
-    text: `⚙️ **Konfigurasi Modem**
+    text: `━━━━━━━━━━━━━━━━━━━━
+⚙️ *PENGATURAN*
+━━━━━━━━━━━━━━━━━━━━
 
-Pilih opsi konfigurasi:`,
+Pilih opsi pengaturan:`,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🔐 Login ke Modem", callback_data: "login" }],
-        [{ text: "ℹ️ Info Modem", callback_data: "info" }],
-        [{ text: "🏠 Kembali", callback_data: "home" }],
+        [{ text: "🔧 Konfigurasi Modem", callback_data: "setup_modem" }],
+        [{ text: "🔐 Masuk ke Modem", callback_data: "login" }],
+        [{ text: "ℹ️ Informasi Perangkat", callback_data: "info" }],
+        [{ text: "🏠 Beranda", callback_data: "home" }],
       ],
     },
   };

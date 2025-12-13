@@ -8,27 +8,78 @@ Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara
 
 ---
 
-## ✨ Features
+## ✨ Fitur Utama
 
-- 🔄 **Ganti IP WAN** - Disconnect/reconnect modem untuk IP baru
-- 📊 **Cek Status** - Monitor status koneksi real-time
-- 💾 **Storage** - Auto-save timestamp perubahan IP
-- 🎨 **Interactive UI** - Inline keyboard yang user-friendly
-- 🔐 **Authentication** - Login support untuk modem
-- ⚡ **Hot Reload** - Development mode dengan auto-restart
-- 🛡️ **Error Handling** - Graceful fallback jika modem offline
+| Fitur | Deskripsi |
+|-------|-----------|
+| 🔄 **Ganti IP WAN** | Disconnect/reconnect modem untuk mendapatkan IP baru |
+| 📊 **Detail Modem** | Informasi lengkap: IP, Provider, Sinyal, Pemakaian Data |
+| 📶 **Kualitas Sinyal** | Monitor RSSI dan kekuatan sinyal real-time |
+| � **Statistik Data** | Total unduhan, unggahan, dan pemakaian bulanan |
+| ⚙️ **Konfigurasi Dinamis** | Setup IP, username, password via bot |
+| 🔐 **Auto-Login** | Login otomatis dengan session management |
+| 💾 **Penyimpanan Lokal** | Simpan konfigurasi dan timestamp perubahan IP |
+| 🛡️ **Error Handling** | Fallback graceful jika modem offline |
 
 ---
 
-## 🚀 Quick Start
+## 📱 Preview Tampilan
+
+### Menu Utama
+```
+👋 Selamat datang, username!
+
+━━━━━━━━━━━━━━━━━━━━
+📡 INFORMASI MODEM
+━━━━━━━━━━━━━━━━━━━━
+
+🏷️ Perangkat: B312-926
+🌐 Alamat IP: 10.40.18.12
+� Operator: Telkomsel
+📊 Pemakaian: ⬇️ 2.93 GB / ⬆️ 416 MB
+🕐 IP Terakhir Diubah: 13/12/2024, 12:30
+
+━━━━━━━━━━━━━━━━━━━━
+```
+
+### Detail Modem
+```
+━━━━━━━━━━━━━━━━━━━━
+📊 DETAIL MODEM
+━━━━━━━━━━━━━━━━━━━━
+
+🏷️ Perangkat: B312-926
+🌐 Alamat IP: 10.40.18.12
+📶 Operator: Telkomsel
+
+━━━━━━━━━━━━━━━━━━━━
+📡 KUALITAS SINYAL
+━━━━━━━━━━━━━━━━━━━━
+
+📶 Bagus
+📊 RSSI: -73dBm
+
+━━━━━━━━━━━━━━━━━━━━
+📈 STATISTIK DATA
+━━━━━━━━━━━━━━━━━━━━
+
+⬇️ Total Unduhan: 2.93 GB
+⬆️ Total Unggahan: 416 MB
+📅 Pemakaian Bulan Ini: 3.2 GB
+
+━━━━━━━━━━━━━━━━━━━━
+```
+
+---
+
+## 🚀 Instalasi
 
 ### 1. Install Dependencies
 ```bash
 bun install
 ```
 
-### 2. Configure Environment
-Copy `.env.example` to `.env` dan edit:
+### 2. Konfigurasi Environment
 ```bash
 cp .env.example .env
 ```
@@ -38,181 +89,156 @@ Edit `.env`:
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 MODEM_IP=192.168.8.1
 MODEM_USERNAME=admin
-MODEM_PASSWORD=admin
+MODEM_PASSWORD=your_password
 ```
 
-**Get Bot Token:**
-1. Open [@BotFather](https://t.me/BotFather) in Telegram
-2. Send `/newbot`
-3. Follow instructions
-4. Copy token to `.env`
+> 💡 **Mendapatkan Bot Token:**
+> 1. Buka [@BotFather](https://t.me/BotFather) di Telegram
+> 2. Kirim `/newbot`
+> 3. Ikuti instruksi
+> 4. Copy token ke `.env`
 
-### 3. Test Connection
+### 3. Jalankan Bot
 ```bash
-bun test.ts
-```
-
-### 4. Start Bot
-```bash
-# Development (with hot reload)
+# Development (dengan hot reload)
 bun run dev
 
 # Production
 bun run start
 
-# Using control script
+# Menggunakan control script
 ./bot.sh start
 ```
 
-### 5. Use Bot
-1. Open Telegram
-2. Search your bot
-3. Send `/start`
-4. Click **🔄 Ganti IP** to change IP
+### 4. Gunakan Bot
+1. Buka Telegram
+2. Cari bot Anda
+3. Kirim `/start`
+4. Gunakan menu interaktif
 
 ---
 
-## 📖 Documentation
+## 🎮 Cara Penggunaan
 
-Dokumentasi lengkap tersedia di folder [`docs/`](docs/):
+### Menu Utama
 
-- **[Quick Start Guide](docs/QUICKSTART.md)** - Panduan cepat penggunaan
-- **[Setup Guide](docs/SETUP.md)** - Panduan instalasi lengkap
-- **[Login Troubleshooting](docs/LOGIN_NOTES.md)** - Solusi masalah autentikasi
-- **[Build Summary](docs/BUILD_SUMMARY.md)** - Detail teknis build
-- **[Status](docs/STATUS.md)** - Status deployment
+| Tombol | Fungsi |
+|--------|--------|
+| 🔄 **Ganti IP** | Disconnect dan reconnect modem untuk IP baru |
+| 📊 **Detail** | Lihat informasi lengkap modem |
+| ⚙️ **Pengaturan** | Konfigurasi dan login modem |
 
-## 🛠 Technology Stack
+### Menu Pengaturan
 
-- **[Bun](https://bun.sh)** - Fast JavaScript runtime
+| Tombol | Fungsi |
+|--------|--------|
+| 🔧 **Konfigurasi Modem** | Setup IP address, username, password |
+| 🔐 **Masuk ke Modem** | Login manual ke modem |
+| ℹ️ **Informasi Perangkat** | Detail perangkat modem |
+
+---
+
+## � API Endpoints (Huawei B312)
+
+Bot ini menggunakan Huawei HiLink API:
+
+| Endpoint | Data |
+|----------|------|
+| `/api/device/information` | Nama perangkat, IP WAN, IMEI |
+| `/api/net/current-plmn` | Nama operator/provider |
+| `/api/device/signal` | Kekuatan sinyal (RSSI, RSRP) |
+| `/api/monitoring/traffic-statistics` | Total upload/download |
+| `/api/monitoring/month_statistics` | Statistik bulanan |
+| `/api/user/login` | Autentikasi |
+| `/api/dialup/mobile-dataswitch` | On/off koneksi data |
+
+---
+
+## 📦 Struktur Proyek
+
+```
+bot-hmonn/
+├── src/
+│   ├── index.ts       # Logic utama bot
+│   ├── modem.ts       # Huawei B312 API client
+│   ├── keyboard.ts    # Menu Telegram
+│   └── storage.ts     # Penyimpanan data lokal
+├── docs/              # Dokumentasi
+├── .env               # Konfigurasi (tidak di-git)
+├── bot.sh             # Script kontrol
+├── test.ts            # Test koneksi
+└── utils.ts           # CLI utilities
+```
+
+---
+
+## 🧪 CLI Tools
+
+```bash
+# Test koneksi modem
+bun test.ts
+
+# CLI utilities
+bun utils.ts ip        # Lihat IP saat ini
+bun utils.ts change    # Ganti IP
+bun utils.ts status    # Cek status
+bun utils.ts login admin password  # Login
+
+# Kontrol bot
+./bot.sh start         # Jalankan bot
+./bot.sh stop          # Hentikan bot
+./bot.sh restart       # Restart bot
+./bot.sh status        # Cek status
+./bot.sh logs          # Lihat log
+```
+
+---
+
+## 🔐 Keamanan
+
+- ✅ Token bot disimpan di `.env` (tidak di-commit ke git)
+- ✅ Password di-encode dengan SHA256 + Base64
+- ✅ Session management dengan cookie
+- ✅ Penyimpanan lokal (tanpa database eksternal)
+- ✅ Konfigurasi `.gitignore` yang proper
+
+---
+
+## 🐛 Troubleshooting
+
+| Masalah | Solusi |
+|---------|--------|
+| Bot tidak merespons | Cek: `./bot.sh status` dan `./bot.sh logs` |
+| Modem tidak terhubung | Test: `ping 192.168.8.1` dan `bun test.ts` |
+| Login error 125003 | Session token issue - bot akan retry otomatis |
+| Login error 108006 | Password salah - cek konfigurasi |
+| IP tidak tampil | Klik Pengaturan → Konfigurasi Modem |
+
+---
+
+## 🛠 Tech Stack
+
+- **[Bun](https://bun.sh)** - JavaScript runtime yang cepat
 - **[TypeScript](https://www.typescriptlang.org/)** - Type safety
 - **[Telegraf](https://telegraf.js.org/)** - Telegram bot framework
 - **[Axios](https://axios-http.com/)** - HTTP client
 
 ---
 
-## 📱 Bot Usage
+## 📖 Dokumentasi
 
-### Commands
-| Command | Description |
-|---------|-------------|
-| `/start` | Start bot and show main menu |
+Dokumentasi lengkap tersedia di folder [`docs/`](docs/):
 
-### Main Features
-
-**🔄 Change IP**
-1. Click "🔄 Ganti IP"
-2. Confirm action
-3. Wait ~10 seconds
-4. Get new IP address
-
-**🔍 Check Status**
-- Connection status
-- Current WAN IP
-- Last change timestamp
-
-**🔧 Configuration**
-- Login to modem
-- View modem info
-- Save credentials
-
----
-
-## 🧪 CLI Tools
-
-### Test Modem Connection
-```bash
-bun test.ts
-```
-
-### Utilities
-```bash
-# Get current IP
-bun utils.ts ip
-
-# Change IP
-bun utils.ts change
-
-# Check status
-bun utils.ts status
-
-# Login to modem
-bun utils.ts login admin password
-```
-
-### Bot Control Script
-```bash
-./bot.sh start      # Start bot
-./bot.sh stop       # Stop bot
-./bot.sh restart    # Restart bot
-./bot.sh status     # Check status
-./bot.sh logs       # View logs
-```
-
----
-
-## 📦 Project Structure
-
-```
-bot-hmonn/
-├── src/
-│   ├── index.ts       # Main bot logic
-│   ├── modem.ts       # Huawei B312 API
-│   ├── keyboard.ts    # Telegram menus
-│   └── storage.ts     # Data storage
-├── docs/              # Documentation
-├── .env               # Configuration
-├── bot.sh             # Control script
-├── test.ts            # Connection tests
-└── utils.ts           # CLI utilities
-```
-
----
-
-## ⚙️ Configuration
-
-Environment variables (`.env`):
-
-```env
-TELEGRAM_BOT_TOKEN=your_bot_token_here  # Required
-MODEM_IP=192.168.8.1                    # Default modem IP
-MODEM_USERNAME=admin                     # Default username
-MODEM_PASSWORD=admin                     # Default password
-```
-
----
-
-## 🔐 Security
-
-- ✅ Bot token stored in `.env` (not committed to git)
-- ✅ Password encoded with SHA256 for authentication
-- ✅ Local storage only (no external databases)
-- ✅ Proper `.gitignore` configuration
-
----
-
-## 🐛 Troubleshooting
-
-**Bot tidak merespons?**
-- Check bot process: `./bot.sh status`
-- Check logs: `./bot.sh logs`
-- Restart bot: `./bot.sh restart`
-
-**Modem tidak terhubung?**
-- Cek IP modem: `ping 192.168.8.1`
-- Test koneksi: `bun test.ts`
-- Update MODEM_IP di `.env` jika perlu
-
-**Login error 125003?**
-- Login manual via browser: http://192.168.8.1
-- Baca [Login Notes](docs/LOGIN_NOTES.md)
-- Ganti IP tetap berfungsi tanpa login penuh
+- [Quick Start Guide](docs/QUICKSTART.md)
+- [Setup Guide](docs/SETUP.md)
+- [Login Troubleshooting](docs/LOGIN_NOTES.md)
+- [Build Summary](docs/BUILD_SUMMARY.md)
 
 ---
 
 ## 📝 License
 
-MIT License - see [LICENSE](LICENSE) file for details
+MIT License - lihat file [LICENSE](LICENSE) untuk detail.
 
 ---
 
@@ -224,13 +250,4 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ---
 
-## 📞 Support
-
-Untuk pertanyaan atau issue:
-- Check [documentation](docs/)
-- Open an issue on GitHub
-- Read [troubleshooting guide](docs/LOGIN_NOTES.md)
-
----
-
-**Made with ❤️ for Huawei B312 users**
+**Made with ❤️ for Huawei B312 users by [@Alrescha79](https://github.com/alrescha79-cmd)**
