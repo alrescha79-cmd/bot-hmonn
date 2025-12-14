@@ -1,6 +1,6 @@
 # 🤖 Telegram Bot Huawei B312 IP Monitor
 
-Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara otomatis.
+Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara otomatis. **Mendukung multi-user** - bisa dihosting secara publik dan digunakan oleh banyak pengguna dengan modem masing-masing.
 
 [![Bun](https://img.shields.io/badge/Bun-1.3.4-black)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org/)
@@ -12,18 +12,67 @@ Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara
 
 | Fitur | Deskripsi |
 |-------|-----------|
+| 👥 **Multi-User** | Setiap pengguna punya konfigurasi modem sendiri |
+| 🔍 **Auto-Detect IP** | Deteksi otomatis IP modem di jaringan |
 | 🔄 **Ganti IP WAN** | Scan jaringan (PLMN) untuk mendapatkan IP baru (~20 detik) |
 | 📊 **Detail Modem** | Informasi lengkap: IP, Provider, Sinyal, Pemakaian Data |
 | 📶 **Kualitas Sinyal** | Monitor RSSI dan kekuatan sinyal real-time |
 | 📈 **Statistik Data** | Total unduhan, unggahan, dan pemakaian bulanan |
 | ⚙️ **Konfigurasi Dinamis** | Setup IP, username, password via bot |
-| 🔐 **Auto-Login** | Login otomatis dengan session & token management |
-| 💾 **Penyimpanan Lokal** | Simpan konfigurasi dan timestamp perubahan IP |
+| 🔐 **Auto-Login** | Login otomatis dengan credentials tersimpan |
+| 💾 **Penyimpanan Per-User** | Setiap user punya config file sendiri |
 | 🛡️ **Error Handling** | Fallback graceful jika modem offline |
 
 ---
 
+## 🎯 Multi-User Hosting
+
+Bot ini dirancang untuk di-host secara publik dan digunakan oleh banyak pengguna:
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   User A     │     │   User B     │     │   User C     │
+│ Modem: 8.1   │     │ Modem: 1.1   │     │ Modem: 0.1   │
+└──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+       │                    │                    │
+       └────────────────────┼────────────────────┘
+                            │
+                     ┌──────▼──────┐
+                     │  Telegram   │
+                     │    Bot      │
+                     └──────┬──────┘
+                            │
+              ┌─────────────┼─────────────┐
+              │             │             │
+        ┌─────▼─────┐ ┌─────▼─────┐ ┌─────▼─────┐
+        │ userA.json│ │ userB.json│ │ userC.json│
+        └───────────┘ └───────────┘ └───────────┘
+```
+
+Setiap pengguna:
+- Menyimpan konfigurasi modem sendiri (IP, username, password)
+- Memiliki session terpisah
+- Tidak mempengaruhi pengguna lain
+
+---
+
 ## 📱 Preview Tampilan
+
+### Setup Baru (Auto-Detect)
+```
+👋 Halo, username!
+
+━━━━━━━━━━━━━━━━━━━━
+🚀 SELAMAT DATANG
+━━━━━━━━━━━━━━━━━━━━
+
+Anda belum mengkonfigurasi modem.
+
+Pilih metode konfigurasi:
+
+[🔍 Deteksi Otomatis]
+[✏️ Input Manual]
+```
 
 ### Menu Utama
 ```
@@ -38,34 +87,6 @@ Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara
 📶 Operator: Telkomsel
 📊 Pemakaian: ⬇️ 2.93 GB / ⬆️ 416 MB
 🕐 IP Terakhir Diubah: 14-12-2024, 12:30:00
-
-━━━━━━━━━━━━━━━━━━━━
-```
-
-### Detail Modem
-```
-━━━━━━━━━━━━━━━━━━━━
-📊 DETAIL MODEM
-━━━━━━━━━━━━━━━━━━━━
-
-🏷️ Perangkat: B312-926
-🌐 Alamat IP: 10.40.18.12
-📶 Operator: Telkomsel
-
-━━━━━━━━━━━━━━━━━━━━
-📡 KUALITAS SINYAL
-━━━━━━━━━━━━━━━━━━━━
-
-📶 Bagus
-📊 RSSI: -73dBm
-
-━━━━━━━━━━━━━━━━━━━━
-📈 STATISTIK DATA
-━━━━━━━━━━━━━━━━━━━━
-
-⬇️ Total Unduhan: 2.93 GB
-⬆️ Total Unggahan: 416 MB
-📅 Pemakaian Bulan Ini: 3.2 GB
 
 ━━━━━━━━━━━━━━━━━━━━
 ```
@@ -87,10 +108,9 @@ cp .env.example .env
 Edit `.env`:
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token_here
-MODEM_IP=192.168.8.1
-MODEM_USERNAME=admin
-MODEM_PASSWORD=your_password
 ```
+
+> 💡 **Catatan:** Konfigurasi modem (IP, username, password) sekarang diatur per-user melalui bot, bukan di `.env`.
 
 > 💡 **Mendapatkan Bot Token:**
 > 1. Buka [@BotFather](https://t.me/BotFather) di Telegram
@@ -114,11 +134,23 @@ bun run start
 1. Buka Telegram
 2. Cari bot Anda
 3. Kirim `/start`
-4. Gunakan menu interaktif
+4. Pilih **"Deteksi Otomatis"** atau **"Input Manual"** untuk setup modem
+5. Masukkan username dan password modem
+6. Selesai! Gunakan menu interaktif
 
 ---
 
 ## 🎮 Cara Penggunaan
+
+### Setup Pertama Kali
+
+1. Kirim `/start`
+2. Bot akan menampilkan opsi setup:
+   - **🔍 Deteksi Otomatis** - Bot scan IP modem umum (192.168.8.1, 192.168.1.1, dll)
+   - **✏️ Input Manual** - Masukkan IP modem secara manual
+3. Masukkan username modem (default: admin)
+4. Masukkan password modem
+5. Bot akan mencoba login dan menyimpan konfigurasi
 
 ### Menu Utama
 
@@ -126,15 +158,15 @@ bun run start
 |--------|--------|
 | 🔄 **Ganti IP** | Scan jaringan (PLMN) untuk IP baru (~20 detik) |
 | 📊 **Detail** | Lihat informasi lengkap modem |
-| ⚙️ **Pengaturan** | Konfigurasi dan login modem |
+| ⚙️ **Pengaturan** | Konfigurasi dan reset |
 
 ### Menu Pengaturan
 
 | Tombol | Fungsi |
 |--------|--------|
-| 🔧 **Konfigurasi Modem** | Setup IP address, username, password |
-| 🔐 **Masuk ke Modem** | Login manual ke modem |
-| ℹ️ **Informasi Perangkat** | Detail perangkat modem |
+| 🔧 **Konfigurasi Modem** | Setup ulang IP address, username, password |
+| 🗑️ **Reset Konfigurasi** | Hapus konfigurasi dan mulai dari awal |
+| ℹ️ **Informasi** | Lihat konfigurasi saat ini |
 
 ---
 
@@ -160,14 +192,18 @@ Bot ini menggunakan Huawei HiLink API:
 ```
 bot-hmonn/
 ├── src/
-│   ├── index.ts       # Logic utama bot
-│   ├── modem.ts       # Huawei B312 API client
+│   ├── index.ts       # Logic utama bot (multi-user handlers)
+│   ├── modem.ts       # Huawei API client (stateless, per-user)
 │   ├── keyboard.ts    # Menu Telegram
-│   └── storage.ts     # Penyimpanan data lokal
+│   └── storage.ts     # Penyimpanan per-user
+├── user_data/         # Config per-user (auto-created)
+│   ├── .gitkeep
+│   ├── 123456.json    # Config untuk user ID 123456
+│   └── ...
 ├── docs/              # Dokumentasi
-├── .env               # Konfigurasi (tidak di-git)
+├── .env               # Bot token (tidak di-git)
 ├── bot.sh             # Script kontrol
-└── storage.json       # Data persisten
+└── storage.json       # [DEPRECATED] Legacy storage
 ```
 
 ---
@@ -188,9 +224,10 @@ bot-hmonn/
 ## 🔐 Keamanan
 
 - ✅ Token bot disimpan di `.env` (tidak di-commit ke git)
-- ✅ Password di-encode dengan SHA256 + Base64
-- ✅ Session & token management dari response headers
-- ✅ Penyimpanan lokal (tanpa database eksternal)
+- ✅ Password di-encode dengan SHA256 + Base64 saat login
+- ✅ Session & token management per-user
+- ✅ Penyimpanan lokal per-user (`user_data/*.json` tidak di-git)
+- ✅ Isolasi penuh antar pengguna
 - ✅ Konfigurasi `.gitignore` yang proper
 
 ---
@@ -200,14 +237,15 @@ bot-hmonn/
 | Masalah | Solusi |
 |---------|--------|
 | Bot tidak merespons | Cek: `./bot.sh status` dan `./bot.sh logs` |
-| Modem tidak terhubung | Test: `ping 192.168.8.1` |
-| Login error 125003 | Session token issue - tutup browser yang mengakses modem |
-| Login error 108006 | Password salah - cek konfigurasi |
+| Modem tidak ditemukan (auto-detect) | Pastikan terhubung ke jaringan yang sama dengan modem |
+| Modem tidak terhubung (manual) | Test: `ping <IP_MODEM>` |
+| Login error 125003 | Session token issue - tunggu sebentar, coba lagi |
+| Login error 108006 | Password salah - reset konfigurasi dan setup ulang |
 | IP tidak berubah | Normal jika ISP memberikan IP "sticky" |
 
 ### ⚠️ Catatan Penting tentang Ganti IP
 
-Fitur ganti IP bekerja dengan **scan jaringan (PLMN)** yang menyebabkan modem disconnect dan reconnect. Metode ini sama dengan yang digunakan di library Python `huawei-lte-api`.
+Fitur ganti IP bekerja dengan **scan jaringan (PLMN)** yang menyebabkan modem disconnect dan reconnect.
 
 **Catatan:**
 - Proses memakan waktu ~20 detik

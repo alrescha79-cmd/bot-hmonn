@@ -8,26 +8,32 @@ import {
   changeIP,
   checkConnection,
   login,
-  autoLogin,
-  setModemIP,
-  getModemIP,
-  setModemCredentials,
+  autoDetectModemIP,
+  testModemConnection,
   normalizeTimestamp,
   ModemInfo,
+  ModemConfig,
+  clearUserSession,
 } from "./modem";
 import {
   homeMenu,
   configMenu,
   confirmChangeIP,
   backToHomeButton,
+  setupMethodMenu,
+  welcomeNewUserMenu,
+  confirmResetMenu,
 } from "./keyboard";
 import {
-  updateIPChange,
-  getLastIPInfo,
-  saveCredentials,
-  getCredentials,
-  saveModemConfig,
-  getModemConfig,
+  getUserConfig,
+  saveUserConfig,
+  hasUserConfig,
+  updateUserIPChange,
+  getUserLastIPInfo,
+  saveUserModemConfig,
+  getUserModemConfig,
+  deleteUserConfig,
+  UserConfig,
 } from "./storage";
 
 // Validate environment variables
@@ -44,58 +50,75 @@ const bot = new Telegraf(BOT_TOKEN, {
   },
 });
 
-// Session storage for multi-step conversations
-const userSessions = new Map<number, any>();
+// Conversation state storage for multi-step conversations
+interface ConversationState {
+  waitingFor?: "modem_ip" | "modem_username" | "modem_password";
+  modemIP?: string;
+  modemUsername?: string;
+}
+
+const userConversations = new Map<number, ConversationState>();
 
 /**
- * Get user session
+ * Get conversation state for a user
  */
-function getSession(userId: number) {
-  if (!userSessions.has(userId)) {
-    userSessions.set(userId, {});
+function getConversation(userId: number): ConversationState {
+  if (!userConversations.has(userId)) {
+    userConversations.set(userId, {});
   }
-  return userSessions.get(userId);
+  return userConversations.get(userId)!;
 }
 
 /**
- * Clear user session
+ * Clear conversation state for a user
  */
-function clearSession(userId: number) {
-  userSessions.delete(userId);
+function clearConversation(userId: number): void {
+  userConversations.delete(userId);
 }
 
 /**
- * Initialize modem config from storage
+ * Get modem config for a user
+ * Returns null if not configured
  */
-async function initModemConfig() {
-  const config = await getModemConfig();
-  if (config) {
-    if (config.ip) {
-      setModemIP(config.ip);
+async function getModemConfigForUser(userId: number): Promise<ModemConfig | null> {
+  const config = await getUserModemConfig(userId);
+  if (config.ip && config.username && config.password) {
+    return {
+      ip: config.ip,
+      username: config.username,
+      password: config.password,
+    };
+  }
+  return null;
+}
+
+/**
+ * Get modem info with stored timestamp for a user
+ */
+async function getModemInfoWithTimestamp(userId: number): Promise<ModemInfo> {
+  const modemConfig = await getModemConfigForUser(userId);
+  if (!modemConfig) {
+    return {
+      name: "Belum Dikonfigurasi",
+      wan_ip: "Setup modem terlebih dahulu",
+    };
+  }
+
+  try {
+    const info = await getFullModemInfo(modemConfig, userId);
+    const lastInfo = await getUserLastIPInfo(userId);
+
+    if (lastInfo.timestamp) {
+      info.timestamp = normalizeTimestamp(lastInfo.timestamp);
     }
-    if (config.username && config.password) {
-      setModemCredentials(config.username, config.password);
-    }
-    console.log(`📡 Loaded modem config: IP=${config.ip}, User=${config.username}`);
+
+    return info;
+  } catch (error) {
+    return {
+      name: "Huawei Modem",
+      wan_ip: "Error getting info",
+    };
   }
-}
-
-// Initialize modem config on startup
-initModemConfig();
-
-/**
- * Get modem info with stored timestamp
- */
-async function getModemInfoWithTimestamp(): Promise<ModemInfo> {
-  const info = await getFullModemInfo();
-  const lastInfo = await getLastIPInfo();
-
-  if (lastInfo.timestamp) {
-    // Normalize timestamp to DD-MM-YYYY, HH:MM:SS format
-    info.timestamp = normalizeTimestamp(lastInfo.timestamp);
-  }
-
-  return info;
 }
 
 /**
@@ -103,13 +126,29 @@ async function getModemInfoWithTimestamp(): Promise<ModemInfo> {
  */
 bot.start(async (ctx) => {
   try {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
     const username = ctx.from?.username || ctx.from?.first_name;
 
-    // Try to get modem info, but don't wait too long
+    // Check if user has configured modem
+    const hasConfig = await hasUserConfig(userId);
+
+    if (!hasConfig) {
+      // New user - show welcome menu with setup options
+      const menu = welcomeNewUserMenu(username);
+      await ctx.reply(menu.text, {
+        reply_markup: menu.reply_markup,
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    // Existing user - show home menu with modem info
     let info: ModemInfo;
     try {
       info = await Promise.race([
-        getModemInfoWithTimestamp(),
+        getModemInfoWithTimestamp(userId),
         new Promise<ModemInfo>((resolve) =>
           setTimeout(() => resolve({
             name: "Huawei B312",
@@ -119,7 +158,6 @@ bot.start(async (ctx) => {
         )
       ]);
     } catch (error) {
-      // Fallback if modem not accessible
       info = {
         name: "Huawei B312",
         wan_ip: "Modem Offline",
@@ -145,12 +183,27 @@ bot.action("home", async (ctx) => {
   try {
     await ctx.answerCbQuery();
 
-    const username = ctx.from?.username || ctx.from?.first_name;
-    let info: ModemInfo;
+    const userId = ctx.from?.id;
+    if (!userId) return;
 
+    const username = ctx.from?.username || ctx.from?.first_name;
+
+    // Check if user has configured modem
+    const hasConfig = await hasUserConfig(userId);
+
+    if (!hasConfig) {
+      const menu = welcomeNewUserMenu(username);
+      await ctx.editMessageText(menu.text, {
+        reply_markup: menu.reply_markup,
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    let info: ModemInfo;
     try {
       info = await Promise.race([
-        getModemInfoWithTimestamp(),
+        getModemInfoWithTimestamp(userId),
         new Promise<ModemInfo>((resolve) =>
           setTimeout(() => resolve({
             name: "Huawei B312",
@@ -185,7 +238,16 @@ bot.action("check_status", async (ctx) => {
   try {
     await ctx.answerCbQuery("Memuat detail modem...");
 
-    const detail = await getDetailedModemInfo();
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const modemConfig = await getModemConfigForUser(userId);
+    if (!modemConfig) {
+      await ctx.reply("❌ Modem belum dikonfigurasi. Gunakan /start untuk setup.");
+      return;
+    }
+
+    const detail = await getDetailedModemInfo(modemConfig, userId);
 
     const detailText = `━━━━━━━━━━━━━━━━━━━━
 📊 *DETAIL MODEM*
@@ -245,17 +307,35 @@ bot.action("info", async (ctx) => {
   try {
     await ctx.answerCbQuery();
 
-    const infoText = `ℹ️ **Informasi Modem**
+    const userId = ctx.from?.id;
+    if (!userId) return;
 
-Model: Huawei B312
-Fungsi: LTE Mobile Router
+    const userConfig = await getUserConfig(userId);
+    const modemIP = userConfig.modemIP || "Belum dikonfigurasi";
+    const modemUsername = userConfig.modemUsername || "Belum dikonfigurasi";
+
+    const infoText = `ℹ️ *Informasi*
+
+━━━━━━━━━━━━━━━━━━━━
+📡 *KONFIGURASI ANDA*
+━━━━━━━━━━━━━━━━━━━━
+
+🌐 IP Modem: \`${modemIP}\`
+👤 Username: \`${modemUsername}\`
+🔑 Password: \\*\\*\\*\\*\\*\\*
+
+━━━━━━━━━━━━━━━━━━━━
+🤖 *TENTANG BOT*
+━━━━━━━━━━━━━━━━━━━━
+
+Model: Huawei B312/B311/E5573
 API: Huawei HiLink API
 
-**Fitur Bot:**
-- Monitoring IP WAN real-time
-- Ganti IP dengan reconnect
-- Login ke modem
-- Tracking perubahan IP`;
+*Fitur:*
+• Monitoring IP WAN real-time
+• Ganti IP dengan PLMN scan
+• Konfigurasi per-pengguna
+• Auto-detect modem IP`;
 
     await ctx.editMessageText(infoText, {
       reply_markup: backToHomeButton(),
@@ -267,19 +347,97 @@ API: Huawei HiLink API
 });
 
 /**
- * Action: Setup Modem - Start setup flow
+ * Action: Setup Modem - Show method selection
  */
 bot.action("setup_modem", async (ctx) => {
   try {
     await ctx.answerCbQuery();
+    const menu = setupMethodMenu();
 
-    const session = getSession(ctx.from.id);
-    session.waitingFor = "modem_ip";
+    await ctx.editMessageText(menu.text, {
+      reply_markup: menu.reply_markup,
+      parse_mode: "Markdown",
+    });
+  } catch (error: any) {
+    await ctx.reply(`❌ Error: ${error.message}`);
+  }
+});
 
-    const currentIP = getModemIP();
+/**
+ * Action: Setup Auto - Auto-detect modem IP
+ */
+bot.action("setup_auto", async (ctx) => {
+  try {
+    await ctx.answerCbQuery("Mencari modem...");
 
-    await ctx.reply(
-      `⚙️ **Setup Modem**\n\nIP Address saat ini: \`${currentIP}\`\n\nMasukkan IP Address modem (contoh: 192.168.8.1):`,
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    await ctx.editMessageText("🔍 *Mencari modem di jaringan...*\n\n_Mohon tunggu, proses ini membutuhkan beberapa detik..._", {
+      parse_mode: "Markdown",
+    });
+
+    const result = await autoDetectModemIP();
+
+    if (result) {
+      const conversation = getConversation(userId);
+      conversation.modemIP = result.ip;
+      conversation.waitingFor = "modem_username";
+
+      await ctx.editMessageText(
+        `✅ *Modem Ditemukan!*\n\n` +
+        `📡 IP: \`${result.ip}\`\n` +
+        `🏷️ Device: *${result.deviceName}*\n\n` +
+        `Masukkan username modem (default: admin):`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[{ text: "❌ Batal", callback_data: "cancel" }]],
+          },
+        }
+      );
+    } else {
+      await ctx.editMessageText(
+        `❌ *Modem Tidak Ditemukan*\n\n` +
+        `Tidak ada modem Huawei yang ditemukan di jaringan.\n\n` +
+        `Pastikan:\n` +
+        `• Anda terhubung ke jaringan yang sama dengan modem\n` +
+        `• Modem dalam keadaan menyala\n\n` +
+        `Coba input manual:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "✏️ Input Manual", callback_data: "setup_manual" }],
+              [{ text: "🔄 Coba Lagi", callback_data: "setup_auto" }],
+              [{ text: "❌ Batal", callback_data: "cancel" }],
+            ],
+          },
+        }
+      );
+    }
+  } catch (error: any) {
+    await ctx.reply(`❌ Error: ${error.message}`);
+  }
+});
+
+/**
+ * Action: Setup Manual - Manual input modem IP
+ */
+bot.action("setup_manual", async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const conversation = getConversation(userId);
+    conversation.waitingFor = "modem_ip";
+
+    await ctx.editMessageText(
+      `✏️ *Setup Manual*\n\n` +
+      `Masukkan IP Address modem:\n` +
+      `(contoh: 192.168.8.1)`,
       {
         parse_mode: "Markdown",
         reply_markup: {
@@ -293,18 +451,49 @@ bot.action("setup_modem", async (ctx) => {
 });
 
 /**
- * Action: Login - Start login flow
+ * Action: Reset Config - Show confirmation
  */
-bot.action("login", async (ctx) => {
+bot.action("reset_config", async (ctx) => {
   try {
     await ctx.answerCbQuery();
+    const menu = confirmResetMenu();
 
-    const session = getSession(ctx.from.id);
-    session.waitingFor = "username";
-
-    await ctx.reply("🔐 **Login ke Modem**\n\nMasukkan username modem:", {
+    await ctx.editMessageText(menu.text, {
+      reply_markup: menu.reply_markup,
       parse_mode: "Markdown",
     });
+  } catch (error: any) {
+    await ctx.reply(`❌ Error: ${error.message}`);
+  }
+});
+
+/**
+ * Action: Confirm Reset - Execute reset
+ */
+bot.action("confirm_reset", async (ctx) => {
+  try {
+    await ctx.answerCbQuery("Menghapus konfigurasi...");
+
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    // Clear session and delete config
+    clearUserSession(userId);
+    await deleteUserConfig(userId);
+
+    await ctx.editMessageText(
+      `✅ *Konfigurasi Dihapus*\n\n` +
+      `Konfigurasi modem Anda telah dihapus.\n\n` +
+      `Gunakan /start untuk setup ulang.`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔧 Setup Ulang", callback_data: "setup_modem" }],
+          ],
+        },
+      }
+    );
   } catch (error: any) {
     await ctx.reply(`❌ Error: ${error.message}`);
   }
@@ -316,6 +505,16 @@ bot.action("login", async (ctx) => {
 bot.action("chg_ip", async (ctx) => {
   try {
     await ctx.answerCbQuery();
+
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const modemConfig = await getModemConfigForUser(userId);
+    if (!modemConfig) {
+      await ctx.reply("❌ Modem belum dikonfigurasi. Gunakan /start untuk setup.");
+      return;
+    }
+
     const menu = confirmChangeIP();
 
     await ctx.editMessageText(menu.text, {
@@ -333,15 +532,25 @@ bot.action("chg_ip", async (ctx) => {
 bot.action("confirm_chg_ip", async (ctx) => {
   try {
     await ctx.answerCbQuery("Memulai proses ganti IP...");
+
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const modemConfig = await getModemConfigForUser(userId);
+    if (!modemConfig) {
+      await ctx.reply("❌ Modem belum dikonfigurasi. Gunakan /start untuk setup.");
+      return;
+    }
+
     await ctx.editMessageText("⏳ **Sedang mengganti IP...**\n\n🔄 Scanning jaringan (PLMN)...\n⏱️ Estimasi waktu: ~20 detik\n\n_Harap tunggu..._", {
       parse_mode: "Markdown",
     });
 
     // Execute IP change
-    const newInfo = await changeIP();
+    const newInfo = await changeIP(modemConfig, userId);
 
     // Save to storage
-    await updateIPChange(newInfo);
+    await updateUserIPChange(userId, newInfo.wan_ip, newInfo.timestamp || "");
 
     const successText = `✅ **IP Berhasil Diganti!**
 
@@ -368,13 +577,29 @@ Koneksi telah aktif kembali.`;
 bot.action("cancel", async (ctx) => {
   try {
     await ctx.answerCbQuery("Dibatalkan");
-    clearSession(ctx.from.id);
 
-    const info = await getModemInfoWithTimestamp();
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    clearConversation(userId);
+
+    const hasConfig = await hasUserConfig(userId);
+
+    if (!hasConfig) {
+      const username = ctx.from?.username || ctx.from?.first_name;
+      const menu = welcomeNewUserMenu(username);
+      await ctx.editMessageText(menu.text, {
+        reply_markup: menu.reply_markup,
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const info = await getModemInfoWithTimestamp(userId);
     const username = ctx.from?.username || ctx.from?.first_name;
     const menu = homeMenu(info, username);
 
-    await ctx.reply(menu.text, {
+    await ctx.editMessageText(menu.text, {
       reply_markup: menu.reply_markup,
       parse_mode: "Markdown",
     });
@@ -387,112 +612,164 @@ bot.action("cancel", async (ctx) => {
  * Handle text messages for multi-step flows
  */
 bot.on(message("text"), async (ctx) => {
-  const session = getSession(ctx.from.id);
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const conversation = getConversation(userId);
 
   try {
     // Setup flow - waiting for modem IP
-    if (session.waitingFor === "modem_ip") {
+    if (conversation.waitingFor === "modem_ip") {
       const ip = ctx.message.text.trim();
 
       // Validate IP format
       const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
       if (!ipRegex.test(ip)) {
-        await ctx.reply("❌ Format IP tidak valid. Contoh: 192.168.8.1\n\nMasukkan IP Address modem:");
+        await ctx.reply(
+          "❌ Format IP tidak valid.\n\nContoh: 192.168.8.1\n\nMasukkan IP Address modem:",
+          {
+            reply_markup: {
+              inline_keyboard: [[{ text: "❌ Batal", callback_data: "cancel" }]],
+            },
+          }
+        );
         return;
       }
 
-      session.modemIP = ip;
-      session.waitingFor = "modem_username";
-      await ctx.reply(`✅ IP: ${ip}\n\nMasukkan username modem (default: admin):`);
+      // Test connection to modem
+      await ctx.reply("⏳ Memeriksa koneksi ke modem...");
+
+      const test = await testModemConnection(ip);
+
+      if (!test.success) {
+        await ctx.reply(
+          `❌ Tidak dapat terhubung ke modem di ${ip}\n\n` +
+          `Pastikan:\n` +
+          `• IP address benar\n` +
+          `• Anda terhubung ke jaringan yang sama\n` +
+          `• Modem dalam keadaan menyala\n\n` +
+          `Coba lagi:`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🔍 Deteksi Otomatis", callback_data: "setup_auto" }],
+                [{ text: "❌ Batal", callback_data: "cancel" }],
+              ],
+            },
+          }
+        );
+        return;
+      }
+
+      conversation.modemIP = ip;
+      conversation.waitingFor = "modem_username";
+
+      await ctx.reply(
+        `✅ *Modem Ditemukan!*\n\n` +
+        `📡 IP: \`${ip}\`\n` +
+        `🏷️ Device: *${test.deviceName}*\n\n` +
+        `Masukkan username modem (default: admin):`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[{ text: "❌ Batal", callback_data: "cancel" }]],
+          },
+        }
+      );
       return;
     }
 
     // Setup flow - waiting for modem username
-    if (session.waitingFor === "modem_username") {
-      session.modemUsername = ctx.message.text.trim() || "admin";
-      session.waitingFor = "modem_password";
-      await ctx.reply(`✅ Username: ${session.modemUsername}\n\nMasukkan password modem:`);
+    if (conversation.waitingFor === "modem_username") {
+      conversation.modemUsername = ctx.message.text.trim() || "admin";
+      conversation.waitingFor = "modem_password";
+
+      await ctx.reply(
+        `✅ Username: \`${conversation.modemUsername}\`\n\nMasukkan password modem:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[{ text: "❌ Batal", callback_data: "cancel" }]],
+          },
+        }
+      );
       return;
     }
 
     // Setup flow - waiting for modem password
-    if (session.waitingFor === "modem_password") {
+    if (conversation.waitingFor === "modem_password") {
       const password = ctx.message.text.trim();
 
-      // Save config
-      const config = {
-        ip: session.modemIP,
-        username: session.modemUsername,
+      if (!conversation.modemIP || !conversation.modemUsername) {
+        await ctx.reply("❌ Terjadi kesalahan. Silakan mulai ulang dengan /start");
+        clearConversation(userId);
+        return;
+      }
+
+      await ctx.reply("⏳ Menyimpan konfigurasi dan mencoba login...");
+
+      const modemConfig: ModemConfig = {
+        ip: conversation.modemIP,
+        username: conversation.modemUsername,
         password: password,
       };
 
-      await saveModemConfig(config);
-      setModemIP(config.ip);
+      // Try to login
+      const loginSuccess = await login(modemConfig, userId);
+
+      if (!loginSuccess) {
+        await ctx.reply(
+          `❌ *Login Gagal*\n\n` +
+          `Username atau password salah.\n\n` +
+          `Coba lagi:`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🔄 Coba Lagi", callback_data: "setup_modem" }],
+                [{ text: "❌ Batal", callback_data: "cancel" }],
+              ],
+            },
+          }
+        );
+        clearConversation(userId);
+        return;
+      }
+
+      // Save config
+      await saveUserModemConfig(
+        userId,
+        modemConfig.ip,
+        modemConfig.username,
+        modemConfig.password
+      );
 
       await ctx.reply(
-        `✅ **Konfigurasi Berhasil Disimpan!**\n\n` +
-        `📡 IP: \`${config.ip}\`\n` +
-        `👤 Username: \`${config.username}\`\n` +
+        `✅ *Konfigurasi Berhasil Disimpan!*\n\n` +
+        `📡 IP: \`${modemConfig.ip}\`\n` +
+        `👤 Username: \`${modemConfig.username}\`\n` +
         `🔑 Password: \`${"*".repeat(password.length)}\`\n\n` +
-        `Konfigurasi akan digunakan untuk koneksi selanjutnya.`,
+        `Konfigurasi akan digunakan untuk login otomatis selanjutnya.\n\n` +
+        `Ketik /start untuk melihat menu utama.`,
         {
           parse_mode: "Markdown",
-          reply_markup: backToHomeButton(),
+          reply_markup: {
+            inline_keyboard: [[{ text: "🏠 Menu Utama", callback_data: "home" }]],
+          },
         }
       );
 
-      clearSession(ctx.from.id);
+      clearConversation(userId);
       return;
     }
 
-    // Login flow - waiting for username
-    if (session.waitingFor === "username") {
-      session.username = ctx.message.text;
-      session.waitingFor = "password";
-      await ctx.reply("Masukkan password modem:");
-      return;
-    }
-
-    // Login flow - waiting for password
-    if (session.waitingFor === "password") {
-      const username = session.username;
-      const password = ctx.message.text;
-
-      await ctx.reply("⏳ Mencoba login ke modem...");
-
-      try {
-        const success = await login(username, password);
-
-        if (success) {
-          // Save credentials
-          await saveCredentials(username, password);
-
-          await ctx.reply("✅ Login berhasil!\n\nCredentials telah disimpan.", {
-            reply_markup: backToHomeButton(),
-          });
-        } else {
-          await ctx.reply("❌ Login gagal. Username atau password salah.", {
-            reply_markup: backToHomeButton(),
-          });
-        }
-      } catch (error: any) {
-        await ctx.reply(`❌ ${error.message}`, {
-          reply_markup: backToHomeButton(),
-        });
-      }
-
-      // Clear session
-      clearSession(ctx.from.id);
-      return;
-    }
-
-    // No active session - show help
+    // No active conversation - show help
     await ctx.reply(
       "Gunakan /start untuk memulai atau pilih menu yang tersedia."
     );
   } catch (error: any) {
     await ctx.reply(`❌ Error: ${error.message}`);
-    clearSession(ctx.from.id);
+    clearConversation(userId);
   }
 });
 
@@ -520,7 +797,7 @@ async function startBot() {
     const botInfo = await bot.telegram.getMe();
     console.log(`✅ Connected as @${botInfo.username}`);
     console.log("✅ Bot is running!");
-    console.log("🎯 Bot ready to receive commands");
+    console.log("🎯 Multi-user mode enabled");
     console.log("📝 Use /start to begin\n");
 
     // Start polling with error handling

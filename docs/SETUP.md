@@ -12,10 +12,9 @@ Edit file `.env` dan isi dengan token bot Telegram Anda:
 
 ```bash
 TELEGRAM_BOT_TOKEN=your_bot_token_here
-MODEM_IP=192.168.8.1
-MODEM_USERNAME=admin
-MODEM_PASSWORD=admin
 ```
+
+> 💡 **Catatan:** Konfigurasi modem (IP, username, password) sekarang diatur per-user melalui bot, bukan di `.env`.
 
 **Cara mendapatkan Bot Token:**
 1. Buka [@BotFather](https://t.me/BotFather) di Telegram
@@ -38,39 +37,79 @@ bun run start
 
 ## 🎯 Fitur Bot
 
-### Menu Utama
-- **🔧 Konfigurasi**: Menu pengaturan modem
-  - Login ke modem
-  - Info modem
-- **🔄 Ganti IP**: Ganti IP WAN dengan reconnect
-- **🔍 Cek Status**: Lihat status koneksi modem
+### Multi-User Support 👥
 
-### Cara Penggunaan
-1. Start bot dengan command `/start`
-2. Bot akan menampilkan IP WAN saat ini
-3. Pilih "Ganti IP" untuk mendapatkan IP baru
-4. Proses scan jaringan (PLMN) ~20 detik
+Bot mendukung banyak pengguna dengan modem berbeda:
+
+- Setiap user punya konfigurasi modem sendiri
+- Konfigurasi disimpan di `user_data/{telegram_id}.json`
+- User A tidak mempengaruhi user B
+
+### Setup Pertama Kali
+
+Saat pertama kali menggunakan bot:
+
+1. Kirim `/start`
+2. Pilih metode konfigurasi:
+   - **🔍 Deteksi Otomatis** - Bot scan IP modem umum
+   - **✏️ Input Manual** - Masukkan IP modem manual
+3. Masukkan username modem (default: admin)
+4. Masukkan password modem
+5. Bot akan login dan menyimpan konfigurasi
+
+### Menu Utama
+- **🔄 Ganti IP**: Ganti IP WAN dengan PLMN scan (~20 detik)
+- **📊 Detail**: Lihat info lengkap modem
+- **⚙️ Pengaturan**: Konfigurasi dan reset
+
+### Menu Pengaturan
+- **🔧 Konfigurasi Modem**: Setup ulang IP, username, password
+- **🗑️ Reset Konfigurasi**: Hapus konfigurasi dan mulai ulang
+- **ℹ️ Informasi**: Lihat konfigurasi saat ini
 
 ## 🔧 Konfigurasi Modem
 
+### Auto-Detect IP
+
+Bot akan mencoba IP modem umum berikut:
+- `192.168.8.1` (Huawei default)
+- `192.168.1.1`
+- `192.168.0.1`
+- `192.168.100.1`
+- `10.0.0.1`
+- `192.168.2.1`
+- `192.168.3.1`
+- `192.168.31.1`
+
+### Manual Input
+
+Jika modem menggunakan IP lain:
+1. Pilih "Input Manual" saat setup
+2. Masukkan IP address modem
+3. Bot akan test koneksi
+4. Lanjutkan dengan username dan password
+
 ### Default Credentials Huawei B312
-- **IP**: 192.168.8.1
 - **Username**: admin
 - **Password**: admin
-
-Jika Anda sudah mengubah password modem, gunakan menu "Konfigurasi" > "Login ke Modem" di bot.
 
 ## 📝 Troubleshooting
 
 ### Bot tidak bisa connect ke modem
 1. Pastikan modem hidup dan terhubung ke jaringan
-2. Cek IP modem sudah benar (default: 192.168.8.1)
-3. Pastikan komputer terhubung ke modem
+2. Pastikan Anda terhubung ke jaringan yang sama dengan modem
+3. Coba ping IP modem: `ping 192.168.8.1`
+
+### Modem tidak ditemukan (Auto-Detect)
+1. Pastikan terhubung ke WiFi/LAN modem
+2. Modem mungkin menggunakan IP non-standard
+3. Gunakan "Input Manual" dan masukkan IP yang benar
 
 ### Gagal login ke modem
 1. Pastikan username dan password benar
-2. Coba reset modem ke factory settings
-3. Gunakan credentials default
+2. Error 125003: Session issue - tunggu sebentar, coba lagi
+3. Error 108006: Password salah - reset dan setup ulang
+4. Tutup browser yang mengakses modem (konflik session)
 
 ### IP tidak berubah setelah PLMN scan
 1. Tunggu beberapa menit dan coba lagi
@@ -80,15 +119,28 @@ Jika Anda sudah mengubah password modem, gunakan menu "Konfigurasi" > "Login ke 
 ## 🔐 Keamanan
 
 - Token bot disimpan di `.env` (tidak di-commit ke git)
-- Password modem di-encode dengan SHA256
-- Credentials disimpan lokal di `storage.json`
+- Password modem di-encode dengan SHA256 saat login
+- Credentials disimpan per-user di `user_data/*.json`
+- File `user_data/*.json` tidak di-commit ke git
 
 ## 📊 Storage
 
-Bot menyimpan data lokal di `storage.json`:
-- IP terakhir
-- Timestamp perubahan IP
-- Credentials login (jika disimpan)
+### Per-User Storage
+Setiap user memiliki file config di `user_data/{telegram_id}.json`:
+
+```json
+{
+  "modemIP": "192.168.8.1",
+  "modemUsername": "admin",
+  "modemPassword": "mypassword",
+  "lastIP": "10.40.18.12",
+  "lastChangeTimestamp": "14-12-2025, 12:30:00",
+  "lastLoginAt": "2025-12-14T12:25:00.000Z"
+}
+```
+
+### Legacy Storage (Deprecated)
+File `storage.json` masih didukung untuk backwards compatibility, tapi tidak lagi digunakan untuk user baru.
 
 ## 🛠 Development
 
@@ -98,6 +150,13 @@ Bot sudah dikonfigurasi dengan hot reload. Setiap perubahan code akan otomatis r
 ### Log
 Bot menampilkan log di console untuk debugging.
 
+### Build
+```bash
+bun run build   # Compile TypeScript
+bun run start   # Run compiled JS
+bun run dev     # Development mode
+```
+
 ## 📚 Referensi
 
 - [Huawei HiLink API](https://github.com/alrescha79-cmd/hmonn)
@@ -106,7 +165,8 @@ Bot menampilkan log di console untuk debugging.
 
 ## 💡 Tips
 
-1. **Jangan spam tombol Ganti IP** - tunggu proses selesai
-2. **Simpan credentials** untuk reconnect otomatis
-3. **Monitor log** untuk debug masalah
-4. **Backup storage.json** jika perlu keep history
+1. **Jangan spam tombol Ganti IP** - tunggu proses selesai (~20 detik)
+2. **Credentials tersimpan otomatis** setelah setup berhasil
+3. **Monitor log** untuk debug masalah: `./bot.sh logs`
+4. **Reset konfigurasi** jika ingin ganti modem
+5. **Multiple users** bisa menggunakan bot yang sama untuk modem berbeda

@@ -1,39 +1,26 @@
 import axios from "axios";
 import crypto from "crypto";
-import { getModemConfig } from "./storage";
 
-// Modem configuration
-let modemIP = process.env.MODEM_IP || "192.168.8.1";
-let modemUsername = process.env.MODEM_USERNAME || "admin";
-let modemPassword = process.env.MODEM_PASSWORD || "admin";
-
-// Store session and token after login for authenticated requests
-let currentSession: string | null = null;
-let currentToken: string | null = null;
-
-export function setModemIP(ip: string) {
-  modemIP = ip;
-  currentSession = null;
+/**
+ * Modem configuration interface for per-user config
+ */
+export interface ModemConfig {
+  ip: string;
+  username: string;
+  password: string;
 }
 
-export function getModemIP(): string {
-  return modemIP;
+/**
+ * Modem session data for per-user sessions
+ */
+export interface ModemSession {
+  session: string | null;
+  token: string | null;
 }
 
-export function setModemCredentials(username: string, password: string) {
-  modemUsername = username;
-  modemPassword = password;
-  currentSession = null;
-}
-
-export function getModemCredentials(): { username: string; password: string } {
-  return { username: modemUsername, password: modemPassword };
-}
-
-function getBaseURL(): string {
-  return `http://${modemIP}/api`;
-}
-
+/**
+ * Modem info return type
+ */
 export interface ModemInfo {
   name: string;
   wan_ip: string;
@@ -42,6 +29,33 @@ export interface ModemInfo {
   dataUsage?: string;
   totalDownload?: number;
   totalUpload?: number;
+}
+
+// Per-user session storage (keyed by Telegram user ID)
+const userSessions = new Map<number, ModemSession>();
+
+// Default config from environment (used as fallback)
+const defaultConfig: ModemConfig = {
+  ip: process.env.MODEM_IP || "192.168.8.1",
+  username: process.env.MODEM_USERNAME || "admin",
+  password: process.env.MODEM_PASSWORD || "admin",
+};
+
+/**
+ * Get or create session for a user
+ */
+function getUserSession(userId: number): ModemSession {
+  if (!userSessions.has(userId)) {
+    userSessions.set(userId, { session: null, token: null });
+  }
+  return userSessions.get(userId)!;
+}
+
+/**
+ * Clear session for a user
+ */
+export function clearUserSession(userId: number): void {
+  userSessions.delete(userId);
 }
 
 /**
@@ -69,10 +83,6 @@ export function formatTimestamp(date: Date = new Date()): string {
 
 /**
  * Normalize any timestamp to DD-MM-YYYY, HH:MM:SS format
- * Handles various formats like:
- * - "14/12/2025, 09.08.40" (old Indonesian locale format)
- * - "12/14/2025, 09:08:40" (US format)
- * - Already correct format "14-12-2025, 09:08:40"
  */
 export function normalizeTimestamp(timestamp: string): string {
   // Check if already in correct format DD-MM-YYYY, HH:MM:SS
@@ -80,7 +90,6 @@ export function normalizeTimestamp(timestamp: string): string {
     return timestamp;
   }
 
-  // Try to parse the timestamp
   try {
     // Handle Indonesian locale format: "14/12/2025, 09.08.40" (DD/MM/YYYY, HH.MM.SS)
     const indonesianMatch = timestamp.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2})\.(\d{1,2})\.(\d{1,2})$/);
@@ -111,23 +120,10 @@ export function normalizeTimestamp(timestamp: string): string {
 }
 
 /**
- * Get fresh token and session for API calls
- * This should be used before each POST request
+ * Get base URL for modem API
  */
-export async function getTokenAndSession(): Promise<{ token: string; session: string }> {
-  // Get fresh token
-  const { token, session } = await getToken();
-
-  // Login if needed and use the response token
-  if (!currentSession) {
-    await autoLogin();
-  }
-
-  // Return the token from login if available, otherwise use the fresh token
-  return {
-    token: currentToken || token,
-    session: currentSession || session,
-  };
+function getBaseURL(config: ModemConfig): string {
+  return `http://${config.ip}/api`;
 }
 
 /**
@@ -151,11 +147,108 @@ function formatBytes(bytes: number): string {
 }
 
 /**
+ * Common modem gateway IPs to try for auto-detection
+ */
+const COMMON_MODEM_IPS = [
+  "192.168.8.1",   // Huawei default
+  "192.168.1.1",   // Generic router
+  "192.168.0.1",   // Generic router
+  "192.168.100.1", // Some ISPs
+  "10.0.0.1",      // Some networks
+  "192.168.2.1",   // Alternative
+  "192.168.3.1",   // ZTE routers
+  "192.168.31.1",  // Xiaomi routers
+];
+
+/**
+ * Auto-detect modem IP by scanning common gateway addresses
+ * Uses /api/webserver/SesTokInfo which doesn't require authentication
+ */
+export async function autoDetectModemIP(): Promise<{ ip: string; deviceName: string } | null> {
+  console.log("🔍 Auto-detecting modem IP...");
+
+  for (const ip of COMMON_MODEM_IPS) {
+    try {
+      console.log(`  Trying ${ip}...`);
+      // Use SesTokInfo endpoint - it doesn't require auth and always responds on Huawei modems
+      const response = await axios.get(`http://${ip}/api/webserver/SesTokInfo`, {
+        timeout: 2000,
+        validateStatus: () => true,
+      });
+
+      if (response.data && typeof response.data === 'string') {
+        // Check if response contains TokInfo (valid Huawei modem response)
+        const tokInfo = parseXMLValue(response.data, "TokInfo");
+        if (tokInfo) {
+          console.log(`✅ Found Huawei modem at ${ip}`);
+          // Try to get device name, but default to "Huawei Modem" if not accessible
+          let deviceName = "Huawei Modem";
+          try {
+            const infoRes = await axios.get(`http://${ip}/api/device/basic_information`, {
+              timeout: 2000,
+              validateStatus: () => true,
+            });
+            const name = parseXMLValue(infoRes.data, "devicename") ||
+              parseXMLValue(infoRes.data, "DeviceName");
+            if (name) deviceName = name;
+          } catch {
+            // Use default name
+          }
+          return { ip, deviceName };
+        }
+      }
+    } catch {
+      // Continue to next IP
+    }
+  }
+
+  console.log("❌ No modem found at common IP addresses");
+  return null;
+}
+
+/**
+ * Test if a modem is reachable at the given IP
+ * Uses /api/webserver/SesTokInfo which doesn't require authentication
+ */
+export async function testModemConnection(ip: string): Promise<{ success: boolean; deviceName?: string }> {
+  try {
+    // Use SesTokInfo endpoint - always responds on Huawei modems without auth
+    const response = await axios.get(`http://${ip}/api/webserver/SesTokInfo`, {
+      timeout: 5000,
+      validateStatus: () => true,
+    });
+
+    if (response.data && typeof response.data === 'string') {
+      const tokInfo = parseXMLValue(response.data, "TokInfo");
+      if (tokInfo) {
+        // Try to get device name
+        let deviceName = "Huawei Modem";
+        try {
+          const infoRes = await axios.get(`http://${ip}/api/device/basic_information`, {
+            timeout: 2000,
+            validateStatus: () => true,
+          });
+          const name = parseXMLValue(infoRes.data, "devicename") ||
+            parseXMLValue(infoRes.data, "DeviceName");
+          if (name) deviceName = name;
+        } catch {
+          // Use default name
+        }
+        return { success: true, deviceName };
+      }
+    }
+    return { success: false };
+  } catch {
+    return { success: false };
+  }
+}
+
+/**
  * Get token and session from Huawei modem
  */
-export async function getToken(): Promise<{ token: string; session: string }> {
+export async function getToken(config: ModemConfig): Promise<{ token: string; session: string }> {
   try {
-    const res = await axios.get(`${getBaseURL()}/webserver/SesTokInfo`, {
+    const res = await axios.get(`${getBaseURL(config)}/webserver/SesTokInfo`, {
       timeout: 10000,
     });
 
@@ -196,13 +289,13 @@ export async function getToken(): Promise<{ token: string; session: string }> {
 /**
  * Encode password using SHA256 (for password_type 4)
  */
-function encodePassword(password: string, token: string): string {
+function encodePassword(username: string, password: string, token: string): string {
   // SHA256 hash of password
   const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
 
   // Concatenate: username + base64(passwordHash) + token
   const base64PasswordHash = Buffer.from(passwordHash).toString('base64');
-  const combined = modemUsername + base64PasswordHash + token;
+  const combined = username + base64PasswordHash + token;
 
   // SHA256 hash of combined
   const finalHash = crypto.createHash('sha256').update(combined).digest('hex');
@@ -212,17 +305,15 @@ function encodePassword(password: string, token: string): string {
 }
 
 /**
- * Login to modem
+ * Login to modem with user-specific config
  */
-export async function login(username?: string, password?: string): Promise<boolean> {
+export async function login(config: ModemConfig, userId: number): Promise<boolean> {
   try {
-    if (username) modemUsername = username;
-    if (password) modemPassword = password;
-
-    const { token, session } = await getToken();
+    const userSession = getUserSession(userId);
+    const { token, session } = await getToken(config);
 
     // Check login state
-    const stateRes = await axios.get(`${getBaseURL()}/user/state-login`, {
+    const stateRes = await axios.get(`${getBaseURL(config)}/user/state-login`, {
       headers: { Cookie: session },
       timeout: 10000,
     });
@@ -230,17 +321,17 @@ export async function login(username?: string, password?: string): Promise<boole
     const passwordType = parseXMLValue(stateRes.data, "password_type") || "4";
 
     // Encode password
-    const encodedPassword = encodePassword(modemPassword, token);
+    const encodedPassword = encodePassword(config.username, config.password, token);
 
     // Login
     const loginXML = `<?xml version="1.0" encoding="UTF-8"?>
 <request>
-  <Username>${modemUsername}</Username>
+  <Username>${config.username}</Username>
   <Password>${encodedPassword}</Password>
   <password_type>${passwordType}</password_type>
 </request>`;
 
-    const loginRes = await axios.post(`${getBaseURL()}/user/login`, loginXML, {
+    const loginRes = await axios.post(`${getBaseURL(config)}/user/login`, loginXML, {
       headers: {
         __RequestVerificationToken: token,
         "Content-Type": "application/xml",
@@ -258,59 +349,54 @@ export async function login(username?: string, password?: string): Promise<boole
         if (sessionCookie) {
           const match = sessionCookie.match(/SessionID=([^;]+)/);
           if (match) {
-            currentSession = `SessionID=${match[1]}`;
+            userSession.session = `SessionID=${match[1]}`;
           }
         }
       }
 
-      if (!currentSession) {
-        currentSession = session;
+      if (!userSession.session) {
+        userSession.session = session;
       }
 
-      // Save token from response headers - this token matches our session!
+      // Save token from response headers
       const respToken = loginRes.headers['__requestverificationtoken'];
       if (respToken) {
-        currentToken = respToken;
-        console.log("✅ Login successful, got new token from response");
+        userSession.token = respToken;
+        console.log(`✅ Login successful for user ${userId}, got new token`);
       } else {
-        // Use the original token if no new one in response
-        currentToken = token;
-        console.log("✅ Login successful");
+        userSession.token = token;
+        console.log(`✅ Login successful for user ${userId}`);
       }
 
       return true;
     }
 
     const errorCode = parseXMLValue(loginRes.data, "code");
-    console.log(`❌ Login failed: ${errorCode}`);
+    console.log(`❌ Login failed for user ${userId}: ${errorCode}`);
     return false;
   } catch (error: any) {
-    console.error("Login error:", error.message);
+    console.error(`Login error for user ${userId}:`, error.message);
     return false;
   }
 }
 
 /**
- * Auto-login with saved credentials
+ * Ensure user is logged in before making authenticated requests
  */
-export async function autoLogin(): Promise<boolean> {
-  const savedConfig = await getModemConfig();
-  if (savedConfig) {
-    if (savedConfig.ip) modemIP = savedConfig.ip;
-    if (savedConfig.username) modemUsername = savedConfig.username;
-    if (savedConfig.password) modemPassword = savedConfig.password;
-    console.log(`📂 Using saved credentials for user: ${modemUsername}`);
+async function ensureLogin(config: ModemConfig, userId: number): Promise<boolean> {
+  const userSession = getUserSession(userId);
+  if (!userSession.session) {
+    return await login(config, userId);
   }
-  return login();
+  return true;
 }
 
 /**
- * Get WAN IP and device info
+ * Get WAN IP and device info (no auth required)
  */
-export async function getWanIP(): Promise<ModemInfo> {
+export async function getWanIP(config: ModemConfig): Promise<ModemInfo> {
   try {
-    // Try without auth first
-    const res = await axios.get(`${getBaseURL()}/device/information`, {
+    const res = await axios.get(`${getBaseURL(config)}/device/information`, {
       timeout: 10000,
       validateStatus: () => true,
     });
@@ -337,18 +423,15 @@ export async function getWanIP(): Promise<ModemInfo> {
 /**
  * Get WAN IP with authentication
  */
-export async function getWanIPWithAuth(): Promise<ModemInfo> {
+export async function getWanIPWithAuth(config: ModemConfig, userId: number): Promise<ModemInfo> {
   try {
-    // Ensure we're logged in
-    if (!currentSession) {
-      await autoLogin();
-    }
+    await ensureLogin(config, userId);
+    const userSession = getUserSession(userId);
+    const { token } = await getToken(config);
 
-    const { token } = await getToken();
-
-    const res = await axios.get(`${getBaseURL()}/device/information`, {
+    const res = await axios.get(`${getBaseURL(config)}/device/information`, {
       headers: {
-        Cookie: currentSession || "",
+        Cookie: userSession.session || "",
         __RequestVerificationToken: token,
       },
       timeout: 10000,
@@ -357,12 +440,11 @@ export async function getWanIPWithAuth(): Promise<ModemInfo> {
 
     if (res.data.includes("<error>")) {
       // Try re-login
-      currentSession = null;
-      await autoLogin();
-      return getWanIPWithAuth();
+      clearUserSession(userId);
+      await login(config, userId);
+      return getWanIPWithAuth(config, userId);
     }
 
-    console.log("✅ Got WAN IP from /device/information");
     return {
       name: parseXMLValue(res.data, "DeviceName") || "Huawei Modem",
       wan_ip: parseXMLValue(res.data, "WanIPAddress") || "Unknown",
@@ -378,9 +460,9 @@ export async function getWanIPWithAuth(): Promise<ModemInfo> {
 /**
  * Check modem connection
  */
-export async function checkConnection(): Promise<boolean> {
+export async function checkConnection(config: ModemConfig): Promise<boolean> {
   try {
-    await axios.get(`${getBaseURL()}/monitoring/traffic-statistics`, { timeout: 5000 });
+    await axios.get(`${getBaseURL(config)}/monitoring/traffic-statistics`, { timeout: 5000 });
     return true;
   } catch {
     return false;
@@ -390,14 +472,15 @@ export async function checkConnection(): Promise<boolean> {
 /**
  * Get network info (provider)
  */
-export async function getNetworkInfo(): Promise<{ provider: string }> {
+export async function getNetworkInfo(config: ModemConfig, userId: number): Promise<{ provider: string }> {
   try {
-    if (!currentSession) await autoLogin();
-    const { token } = await getToken();
+    await ensureLogin(config, userId);
+    const userSession = getUserSession(userId);
+    const { token } = await getToken(config);
 
-    const res = await axios.get(`${getBaseURL()}/net/current-plmn`, {
+    const res = await axios.get(`${getBaseURL(config)}/net/current-plmn`, {
       headers: {
-        Cookie: currentSession || "",
+        Cookie: userSession.session || "",
         __RequestVerificationToken: token,
       },
       timeout: 10000,
@@ -416,7 +499,7 @@ export async function getNetworkInfo(): Promise<{ provider: string }> {
 /**
  * Get traffic statistics
  */
-export async function getTrafficStats(): Promise<{
+export async function getTrafficStats(config: ModemConfig, userId: number): Promise<{
   currentDownload: number;
   currentUpload: number;
   totalDownload: number;
@@ -424,12 +507,13 @@ export async function getTrafficStats(): Promise<{
   dataUsage: string;
 }> {
   try {
-    if (!currentSession) await autoLogin();
-    const { token } = await getToken();
+    await ensureLogin(config, userId);
+    const userSession = getUserSession(userId);
+    const { token } = await getToken(config);
 
-    const res = await axios.get(`${getBaseURL()}/monitoring/traffic-statistics`, {
+    const res = await axios.get(`${getBaseURL(config)}/monitoring/traffic-statistics`, {
       headers: {
-        Cookie: currentSession || "",
+        Cookie: userSession.session || "",
         __RequestVerificationToken: token,
       },
       timeout: 10000,
@@ -461,7 +545,7 @@ export async function getTrafficStats(): Promise<{
 /**
  * Get signal info
  */
-export async function getSignalInfo(): Promise<{
+export async function getSignalInfo(config: ModemConfig, userId: number): Promise<{
   rssi: string;
   rsrp: string;
   rsrq: string;
@@ -469,12 +553,13 @@ export async function getSignalInfo(): Promise<{
   signalStrength: string;
 }> {
   try {
-    if (!currentSession) await autoLogin();
-    const { token } = await getToken();
+    await ensureLogin(config, userId);
+    const userSession = getUserSession(userId);
+    const { token } = await getToken(config);
 
-    const res = await axios.get(`${getBaseURL()}/device/signal`, {
+    const res = await axios.get(`${getBaseURL(config)}/device/signal`, {
       headers: {
-        Cookie: currentSession || "",
+        Cookie: userSession.session || "",
         __RequestVerificationToken: token,
       },
       timeout: 10000,
@@ -504,18 +589,19 @@ export async function getSignalInfo(): Promise<{
 /**
  * Get monthly statistics
  */
-export async function getMonthStats(): Promise<{
+export async function getMonthStats(config: ModemConfig, userId: number): Promise<{
   currentMonthDownload: number;
   currentMonthUpload: number;
   monthUsage: string;
 }> {
   try {
-    if (!currentSession) await autoLogin();
-    const { token } = await getToken();
+    await ensureLogin(config, userId);
+    const userSession = getUserSession(userId);
+    const { token } = await getToken(config);
 
-    const res = await axios.get(`${getBaseURL()}/monitoring/month_statistics`, {
+    const res = await axios.get(`${getBaseURL(config)}/monitoring/month_statistics`, {
       headers: {
-        Cookie: currentSession || "",
+        Cookie: userSession.session || "",
         __RequestVerificationToken: token,
       },
       timeout: 10000,
@@ -537,14 +623,14 @@ export async function getMonthStats(): Promise<{
 /**
  * Get full modem info
  */
-export async function getFullModemInfo(): Promise<ModemInfo> {
+export async function getFullModemInfo(config: ModemConfig, userId: number): Promise<ModemInfo> {
   try {
-    if (!currentSession) await autoLogin();
+    await ensureLogin(config, userId);
 
     const [wanInfo, networkInfo, trafficStats] = await Promise.all([
-      getWanIPWithAuth(),
-      getNetworkInfo(),
-      getTrafficStats(),
+      getWanIPWithAuth(config, userId),
+      getNetworkInfo(config, userId),
+      getTrafficStats(config, userId),
     ]);
 
     return {
@@ -565,7 +651,7 @@ export async function getFullModemInfo(): Promise<ModemInfo> {
 /**
  * Get detailed modem info
  */
-export async function getDetailedModemInfo(): Promise<{
+export async function getDetailedModemInfo(config: ModemConfig, userId: number): Promise<{
   deviceName: string;
   wanIP: string;
   provider: string;
@@ -576,14 +662,14 @@ export async function getDetailedModemInfo(): Promise<{
   monthUsage: string;
 }> {
   try {
-    if (!currentSession) await autoLogin();
+    await ensureLogin(config, userId);
 
     const [wanInfo, networkInfo, signalInfo, trafficStats, monthStats] = await Promise.all([
-      getWanIPWithAuth(),
-      getNetworkInfo(),
-      getSignalInfo(),
-      getTrafficStats(),
-      getMonthStats(),
+      getWanIPWithAuth(config, userId),
+      getNetworkInfo(config, userId),
+      getSignalInfo(config, userId),
+      getTrafficStats(config, userId),
+      getMonthStats(config, userId),
     ]);
 
     return {
@@ -611,22 +697,63 @@ export async function getDetailedModemInfo(): Promise<{
 }
 
 /**
- * Change IP by triggering PLMN network scan
- * Calling /api/net/plmn-list causes the modem to disconnect and reconnect to network
- * This is the same method used in Python huawei-lte-api library
+ * Trigger PLMN network scan
  */
-export async function changeIP(): Promise<ModemInfo> {
+async function triggerPLMNScan(config: ModemConfig, userId: number): Promise<{ success: boolean; networks?: string[] }> {
   try {
-    console.log("Starting IP change process via PLMN scan...");
+    console.log("Requesting PLMN list (network scan)...");
+
+    await ensureLogin(config, userId);
+    const userSession = getUserSession(userId);
+    const { token } = await getToken(config);
+
+    const res = await axios.get(`${getBaseURL(config)}/net/plmn-list`, {
+      headers: {
+        Cookie: userSession.session || "",
+        __RequestVerificationToken: token,
+      },
+      timeout: 120000, // 2 minutes timeout
+      validateStatus: () => true,
+    });
+
+    const responseData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+    console.log("PLMN scan response:", responseData.substring(0, 300));
+
+    if (responseData.includes("<error>")) {
+      const errorCode = parseXMLValue(responseData, "code");
+      console.log(`PLMN scan error code: ${errorCode}`);
+      return { success: false };
+    }
+
+    const networks: string[] = [];
+    const fullNameMatches = responseData.matchAll(/<FullName>([^<]+)<\/FullName>/g);
+    for (const match of fullNameMatches) {
+      networks.push(match[1]);
+    }
+
+    console.log(`Found ${networks.length} networks:`, networks.join(", "));
+    return { success: true, networks };
+  } catch (error: any) {
+    console.error("PLMN scan error:", error.message);
+    return { success: false };
+  }
+}
+
+/**
+ * Change IP by triggering PLMN network scan
+ */
+export async function changeIP(config: ModemConfig, userId: number): Promise<ModemInfo> {
+  try {
+    console.log(`Starting IP change process for user ${userId}...`);
 
     // Get old IP first
-    const oldInfo = await getWanIPWithAuth();
+    const oldInfo = await getWanIPWithAuth(config, userId);
     const oldIP = oldInfo.wan_ip;
     console.log("Old IP:", oldIP);
 
-    // Trigger PLMN scan - this causes network reconnection
+    // Trigger PLMN scan
     console.log("Triggering PLMN network scan...");
-    const scanResult = await triggerPLMNScan();
+    const scanResult = await triggerPLMNScan(config, userId);
 
     if (!scanResult.success) {
       console.log("⚠️ PLMN scan may have issues, but continuing...");
@@ -639,11 +766,10 @@ export async function changeIP(): Promise<ModemInfo> {
     await sleep(15000);
 
     // Force re-login and get new IP
-    currentSession = null;
-    currentToken = null;
-    await autoLogin();
+    clearUserSession(userId);
+    await login(config, userId);
 
-    const newInfo = await getWanIPWithAuth();
+    const newInfo = await getWanIPWithAuth(config, userId);
     newInfo.timestamp = formatTimestamp();
 
     console.log("IP change completed:");
@@ -664,92 +790,38 @@ export async function changeIP(): Promise<ModemInfo> {
 }
 
 /**
- * Trigger PLMN network scan using /api/net/plmn-list
- * This is a GET request that causes the modem to scan for available networks
- * which disconnects and reconnects the current network, often resulting in new IP
+ * Reboot modem
  */
-export async function triggerPLMNScan(): Promise<{ success: boolean; networks?: string[] }> {
-  try {
-    console.log("Requesting PLMN list (network scan)...");
-
-    // Ensure we're logged in
-    if (!currentSession) {
-      await autoLogin();
-    }
-
-    // Get fresh token for the request
-    const { token } = await getToken();
-
-    // GET request to /api/net/plmn-list - this triggers network scan
-    const res = await axios.get(`${getBaseURL()}/net/plmn-list`, {
-      headers: {
-        Cookie: currentSession || "",
-        __RequestVerificationToken: token,
-      },
-      timeout: 120000, // 2 minutes timeout - scan can take a while
-      validateStatus: () => true,
-    });
-
-    const responseData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-    console.log("PLMN scan response:", responseData.substring(0, 300));
-
-    // Check for errors
-    if (responseData.includes("<error>")) {
-      const errorCode = parseXMLValue(responseData, "code");
-      console.log(`PLMN scan error code: ${errorCode}`);
-      // Even with error, the scan might have triggered reconnection
-      return { success: false };
-    }
-
-    // Parse networks if available
-    const networks: string[] = [];
-    const fullNameMatches = responseData.matchAll(/<FullName>([^<]+)<\/FullName>/g);
-    for (const match of fullNameMatches) {
-      networks.push(match[1]);
-    }
-
-    console.log(`Found ${networks.length} networks:`, networks.join(", "));
-    return { success: true, networks };
-  } catch (error: any) {
-    console.error("PLMN scan error:", error.message);
-    // Even if request fails, modem might have started the scan process
-    return { success: false };
-  }
-}
-
-/**
- * Reboot modem using /api/device/control endpoint
- */
-export async function rebootModem(): Promise<{ success: boolean; error?: string }> {
+export async function rebootModem(config: ModemConfig, userId: number): Promise<{ success: boolean; error?: string }> {
   try {
     console.log("Preparing to reboot modem...");
 
-    // Fresh login
-    currentSession = null;
-    currentToken = null;
-    const loginSuccess = await autoLogin();
+    clearUserSession(userId);
+    const loginSuccess = await login(config, userId);
 
-    if (!loginSuccess || !currentSession) {
+    if (!loginSuccess) {
       return { success: false, error: "Login failed" };
     }
 
-    // Get fresh token for POST request
-    const { token: freshToken } = await getToken();
+    const userSession = getUserSession(userId);
+    if (!userSession.session) {
+      return { success: false, error: "No valid session after login" };
+    }
+
+    const { token: freshToken } = await getToken(config);
 
     console.log("Sending reboot command...");
-    console.log("Token:", freshToken.substring(0, 20) + "...");
 
-    // Use /api/device/control with Control=1 for reboot
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <request>
   <Control>1</Control>
 </request>`;
 
-    const res = await axios.post(`${getBaseURL()}/device/control`, xml, {
+    const res = await axios.post(`${getBaseURL(config)}/device/control`, xml, {
       headers: {
         __RequestVerificationToken: freshToken,
         "Content-Type": "application/xml",
-        Cookie: currentSession,
+        Cookie: userSession.session,
       },
       timeout: 15000,
       validateStatus: () => true,
@@ -762,7 +834,6 @@ export async function rebootModem(): Promise<{ success: boolean; error?: string 
       return { success: true };
     }
 
-    // Check for error code
     const errorCode = parseXMLValue(responseData, "code");
     if (errorCode) {
       console.log(`Reboot error code: ${errorCode}`);
@@ -777,42 +848,32 @@ export async function rebootModem(): Promise<{ success: boolean; error?: string 
 }
 
 /**
- * Set mobile data on/off using mobile-dataswitch endpoint
- * This is more reliable than dialup/dial
- * IMPORTANT: Huawei tokens are single-use, so we need fresh token for each POST
+ * Set mobile data on/off
  */
-export async function setMobileData(enabled: boolean): Promise<{ success: boolean; response?: string }> {
+export async function setMobileData(config: ModemConfig, userId: number, enabled: boolean): Promise<{ success: boolean; response?: string }> {
   try {
-    // Fresh login for each operation
-    currentSession = null;
-    currentToken = null;
-    await autoLogin();
+    clearUserSession(userId);
+    await login(config, userId);
 
-    if (!currentSession) {
+    const userSession = getUserSession(userId);
+    if (!userSession.session) {
       throw new Error("No valid session after login");
     }
 
-    // Store session for TypeScript type narrowing
-    const sessionCookie: string = currentSession;
-
-    // CRITICAL: Get a fresh token AFTER login for the POST request
-    // The login token is consumed by the login itself
-    // Huawei uses single-use tokens!
-    const { token: freshToken } = await getToken();
+    const sessionCookie = userSession.session;
+    const { token: freshToken } = await getToken(config);
 
     const action = enabled ? 1 : 0;
     const actionName = enabled ? "ON" : "OFF";
 
     console.log(`Setting mobile data ${actionName}...`);
-    console.log("Fresh Token:", freshToken.substring(0, 20) + "...");
-    console.log("Session:", sessionCookie.substring(0, 30) + "...");
 
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <request>
   <dataswitch>${action}</dataswitch>
 </request>`;
 
-    const res = await axios.post(`${getBaseURL()}/dialup/mobile-dataswitch`, xml, {
+    const res = await axios.post(`${getBaseURL(config)}/dialup/mobile-dataswitch`, xml, {
       headers: {
         __RequestVerificationToken: freshToken,
         "Content-Type": "application/xml",
@@ -828,14 +889,13 @@ export async function setMobileData(enabled: boolean): Promise<{ success: boolea
     // Update token from response if available
     const respToken = res.headers['__requestverificationtoken'];
     if (respToken) {
-      currentToken = String(respToken);
+      userSession.token = String(respToken);
     }
 
     if (responseData.includes("<response>OK</response>")) {
       return { success: true, response: responseData };
     }
 
-    // Check for specific error codes
     const errorCode = parseXMLValue(responseData, "code");
     if (errorCode) {
       console.log(`Error code: ${errorCode}`);
@@ -848,3 +908,40 @@ export async function setMobileData(enabled: boolean): Promise<{ success: boolea
   }
 }
 
+// ============================================
+// Legacy exports for backwards compatibility
+// ============================================
+
+// These use the default config from environment variables
+// and a dummy user ID of 0 for the global session
+
+/**
+ * @deprecated Use setModemIP with per-user config instead
+ */
+export function setModemIP(_ip: string): void {
+  defaultConfig.ip = _ip;
+  clearUserSession(0);
+}
+
+/**
+ * @deprecated Use per-user config instead
+ */
+export function getModemIP(): string {
+  return defaultConfig.ip;
+}
+
+/**
+ * @deprecated Use per-user config instead
+ */
+export function setModemCredentials(username: string, password: string): void {
+  defaultConfig.username = username;
+  defaultConfig.password = password;
+  clearUserSession(0);
+}
+
+/**
+ * @deprecated Use per-user login instead
+ */
+export async function autoLogin(): Promise<boolean> {
+  return login(defaultConfig, 0);
+}

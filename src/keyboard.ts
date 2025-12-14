@@ -54,9 +54,90 @@ Pilih opsi pengaturan:`,
     reply_markup: {
       inline_keyboard: [
         [{ text: "🔧 Konfigurasi Modem", callback_data: "setup_modem" }],
-        [{ text: "🔐 Masuk ke Modem", callback_data: "login" }],
+        [{ text: "🗑️ Reset Konfigurasi", callback_data: "reset_config" }],
         [{ text: "ℹ️ Informasi Perangkat", callback_data: "info" }],
         [{ text: "🏠 Beranda", callback_data: "home" }],
+      ],
+    },
+  };
+}
+
+/**
+ * Setup method selection menu (auto-detect vs manual)
+ */
+export function setupMethodMenu(): {
+  text: string;
+  reply_markup: InlineKeyboardMarkup;
+} {
+  return {
+    text: `⚙️ *SETUP MODEM*
+
+Pilih metode konfigurasi:
+
+🔍 *Deteksi Otomatis*
+Bot akan mencari modem di jaringan secara otomatis.
+
+✏️ *Input Manual*
+Masukkan IP address modem secara manual.`,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🔍 Deteksi Otomatis", callback_data: "setup_auto" }],
+        [{ text: "✏️ Input Manual", callback_data: "setup_manual" }],
+        [{ text: "❌ Batal", callback_data: "cancel" }],
+      ],
+    },
+  };
+}
+
+/**
+ * Welcome message for new users who need to setup modem
+ */
+export function welcomeNewUserMenu(username?: string): {
+  text: string;
+  reply_markup: InlineKeyboardMarkup;
+} {
+  const greeting = username ? `👋 Halo, *${username}*!` : "👋 Halo!";
+
+  return {
+    text: `${greeting}
+
+━━━━━━━━━━━━━━━━━━━━
+🚀 *SELAMAT DATANG*
+━━━━━━━━━━━━━━━━━━━━
+
+Anda belum mengkonfigurasi modem.
+
+Untuk mulai menggunakan bot ini, silakan setup modem terlebih dahulu.
+
+*Pilih metode konfigurasi:*`,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🔍 Deteksi Otomatis", callback_data: "setup_auto" }],
+        [{ text: "✏️ Input Manual", callback_data: "setup_manual" }],
+      ],
+    },
+  };
+}
+
+/**
+ * Confirm reset configuration
+ */
+export function confirmResetMenu(): {
+  text: string;
+  reply_markup: InlineKeyboardMarkup;
+} {
+  return {
+    text: `⚠️ *KONFIRMASI RESET*
+
+Apakah Anda yakin ingin menghapus konfigurasi modem?
+
+Anda perlu setup ulang setelah ini.`,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅ Ya, Reset", callback_data: "confirm_reset" },
+          { text: "❌ Batal", callback_data: "cfg" },
+        ],
       ],
     },
   };
