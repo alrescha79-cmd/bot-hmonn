@@ -32,6 +32,12 @@ Detail teknis build dan implementasi:
 - Technical details
 - API endpoints used
 
+### [Deployment Guide](DEPLOYMENT.md)
+Panduan deploy bot sebagai systemd service:
+- Setup service
+- Useful commands
+- Catatan penting
+
 ### [Status](STATUS.md)
 Status deployment dan informasi bot:
 - Current status

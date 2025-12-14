@@ -231,6 +231,8 @@ Dokumentasi lengkap tersedia di folder [`docs/`](docs/):
 
 - [Quick Start Guide](docs/QUICKSTART.md)
 - [Setup Guide](docs/SETUP.md)
+- [**OpenWrt Deployment**](docs/OPENWRT.md) - Deploy ke STB HG680P
+- [Deployment Guide](docs/DEPLOYMENT.md) - Deploy options
 - [Login Troubleshooting](docs/LOGIN_NOTES.md)
 - [Build Summary](docs/BUILD_SUMMARY.md)
 
@@ -245,7 +247,7 @@ MIT License - lihat file [LICENSE](LICENSE) untuk detail.
 ## 🙏 Credits
 
 - Bot framework: [Telegraf](https://telegraf.js.org/)
-- Huawei API reference: [hmonn](https://github.com/alrescha79-cmd/hmonn)
+- Huawei API reference: [huawei-lte-api](https://github.com/Salamek/huawei-lte-api)
 - Runtime: [Bun](https://bun.sh)
 
 ---

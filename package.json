@@ -2,11 +2,13 @@
   "name": "bot-hmonn",
   "version": "1.0.0",
   "description": "Telegram Bot for Huawei B312 IP Monitor - Monitor and change WAN IP automatically",
-  "main": "src/index.ts",
-  "type": "module",
+  "main": "dist/index.js",
+  "type": "commonjs",
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
+    "build": "tsc",
+    "start:node": "node dist/index.js",
     "test": "bun test.ts"
   },
   "keywords": [
@@ -25,14 +27,14 @@
   },
   "dependencies": {
     "axios": "^1.7.9",
-    "huawei-lte-api": "^0.1.1",
     "telegraf": "^4.16.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/node": "^20.0.0",
     "typescript": "^5.7.2"
   },
   "engines": {
-    "bun": ">=1.0.0"
+    "node": ">=18.0.0"
   }
 }

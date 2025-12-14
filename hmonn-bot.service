@@ -1,0 +1,15 @@
+[Unit]
+Description=Huawei Modem Telegram Bot (hmonn)
+After=network.target
+
+[Service]
+Type=simple
+User=son
+WorkingDirectory=/media/son/BackUp/OpenWrt/bot-hmonn
+ExecStart=/home/son/.bun/bin/bun run start
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
