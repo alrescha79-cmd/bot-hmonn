@@ -52,6 +52,85 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Format timestamp to DD-MM-YYYY, HH:MM:SS format
+ */
+export function formatTimestamp(date: Date = new Date()): string {
+  const pad = (n: number): string => n.toString().padStart(2, '0');
+
+  const day = pad(date.getDate());
+  const month = pad(date.getMonth() + 1);
+  const year = date.getFullYear();
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  const seconds = pad(date.getSeconds());
+
+  return `${day}-${month}-${year}, ${hours}:${minutes}:${seconds}`;
+}
+
+/**
+ * Normalize any timestamp to DD-MM-YYYY, HH:MM:SS format
+ * Handles various formats like:
+ * - "14/12/2025, 09.08.40" (old Indonesian locale format)
+ * - "12/14/2025, 09:08:40" (US format)
+ * - Already correct format "14-12-2025, 09:08:40"
+ */
+export function normalizeTimestamp(timestamp: string): string {
+  // Check if already in correct format DD-MM-YYYY, HH:MM:SS
+  if (/^\d{2}-\d{2}-\d{4}, \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
+    return timestamp;
+  }
+
+  // Try to parse the timestamp
+  try {
+    // Handle Indonesian locale format: "14/12/2025, 09.08.40" (DD/MM/YYYY, HH.MM.SS)
+    const indonesianMatch = timestamp.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2})\.(\d{1,2})\.(\d{1,2})$/);
+    if (indonesianMatch) {
+      const [, day, month, year, hours, minutes, seconds] = indonesianMatch;
+      const pad = (s: string) => s.padStart(2, '0');
+      return `${pad(day)}-${pad(month)}-${year}, ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+    }
+
+    // Handle US format: "12/14/2025, 09:08:40" (MM/DD/YYYY, HH:MM:SS)
+    const usMatch = timestamp.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}):(\d{1,2}):(\d{1,2})$/);
+    if (usMatch) {
+      const [, month, day, year, hours, minutes, seconds] = usMatch;
+      const pad = (s: string) => s.padStart(2, '0');
+      return `${pad(day)}-${pad(month)}-${year}, ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+    }
+
+    // Fallback: try parsing with Date
+    const date = new Date(timestamp);
+    if (!isNaN(date.getTime())) {
+      return formatTimestamp(date);
+    }
+  } catch {
+    // If parsing fails, return original
+  }
+
+  return timestamp;
+}
+
+/**
+ * Get fresh token and session for API calls
+ * This should be used before each POST request
+ */
+export async function getTokenAndSession(): Promise<{ token: string; session: string }> {
+  // Get fresh token
+  const { token, session } = await getToken();
+
+  // Login if needed and use the response token
+  if (!currentSession) {
+    await autoLogin();
+  }
+
+  // Return the token from login if available, otherwise use the fresh token
+  return {
+    token: currentToken || token,
+    session: currentSession || session,
+  };
+}
+
+/**
  * Parse XML response from Huawei modem
  */
 function parseXMLValue(xml: string, tag: string): string {
@@ -532,111 +611,32 @@ export async function getDetailedModemInfo(): Promise<{
 }
 
 /**
- * Change IP by forcing network re-registration
- * Uses token saved from login for POST requests
+ * Change IP by triggering PLMN network scan
+ * Calling /api/net/plmn-list causes the modem to disconnect and reconnect to network
+ * This is the same method used in Python huawei-lte-api library
  */
 export async function changeIP(): Promise<ModemInfo> {
   try {
-    console.log("Starting IP change process...");
+    console.log("Starting IP change process via PLMN scan...");
 
     // Get old IP first
     const oldInfo = await getWanIPWithAuth();
     const oldIP = oldInfo.wan_ip;
     console.log("Old IP:", oldIP);
 
-    // Force fresh login to get synchronized token+session
-    console.log("Getting fresh login session...");
-    currentSession = null;
-    currentToken = null;
-    const loginSuccess = await autoLogin();
-    if (!loginSuccess) {
-      throw new Error("Login required");
-    }
+    // Trigger PLMN scan - this causes network reconnection
+    console.log("Triggering PLMN network scan...");
+    const scanResult = await triggerPLMNScan();
 
-    // Use the token saved from login
-    if (!currentToken || !currentSession) {
-      throw new Error("No valid token/session after login");
-    }
-    let postToken: string = currentToken;
-    const postSession: string = currentSession;
-
-    console.log("Token for POST:", postToken.substring(0, 20) + "...");
-    console.log("Session:", postSession.substring(0, 30) + "...");
-
-    // Disconnect via dialup/dial
-    console.log("Disconnecting PPP connection...");
-
-    const dialDisconnectXML = `<?xml version="1.0" encoding="UTF-8"?>
-<request>
-  <Action>0</Action>
-</request>`;
-
-    const dialDisconnectRes = await axios.post(`${getBaseURL()}/dialup/dial`, dialDisconnectXML, {
-      headers: {
-        __RequestVerificationToken: postToken,
-        "Content-Type": "application/xml",
-        Cookie: postSession,
-      },
-      timeout: 15000,
-      validateStatus: () => true,
-    });
-
-    const disconnectData = dialDisconnectRes.data;
-    console.log("Disconnect response:", disconnectData.substring(0, 150));
-
-    // Check response and save new token if provided
-    const disconnectRespToken = dialDisconnectRes.headers['__requestverificationtoken'];
-    if (disconnectRespToken) {
-      postToken = String(disconnectRespToken);
-      console.log("Got new token from disconnect response");
-    }
-
-    if (disconnectData.includes("<response>OK</response>")) {
-      console.log("✅ Disconnect successful");
+    if (!scanResult.success) {
+      console.log("⚠️ PLMN scan may have issues, but continuing...");
     } else {
-      console.log("⚠️ Disconnect may have failed, continuing anyway...");
+      console.log("✅ PLMN scan completed");
     }
 
-    // Wait for disconnect
-    await sleep(5000);
-
-    // Reconnect - re-login to get fresh token
-    console.log("Reconnecting PPP connection...");
-    currentSession = null;
-    currentToken = null;
-    await autoLogin();
-
-    if (!currentToken || !currentSession) {
-      throw new Error("Re-login failed");
-    }
-    postToken = currentToken;
-
-    const dialConnectXML = `<?xml version="1.0" encoding="UTF-8"?>
-<request>
-  <Action>1</Action>
-</request>`;
-
-    const dialConnectRes = await axios.post(`${getBaseURL()}/dialup/dial`, dialConnectXML, {
-      headers: {
-        __RequestVerificationToken: postToken,
-        "Content-Type": "application/xml",
-        Cookie: currentSession || "",
-      },
-      timeout: 15000,
-      validateStatus: () => true,
-    });
-
-    const connectData = dialConnectRes.data;
-    console.log("Reconnect response:", connectData.substring(0, 150));
-
-    if (connectData.includes("<response>OK</response>")) {
-      console.log("✅ Reconnect successful");
-    } else {
-      console.log("⚠️ Reconnect may have failed");
-    }
-
-    console.log("Waiting for new IP assignment...");
-    await sleep(10000);
+    // Wait for network reconnection
+    console.log("Waiting for network reconnection (15 seconds)...");
+    await sleep(15000);
 
     // Force re-login and get new IP
     currentSession = null;
@@ -644,22 +644,14 @@ export async function changeIP(): Promise<ModemInfo> {
     await autoLogin();
 
     const newInfo = await getWanIPWithAuth();
-
-    newInfo.timestamp = new Date().toLocaleString("id-ID", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+    newInfo.timestamp = formatTimestamp();
 
     console.log("IP change completed:");
     console.log("  Old IP:", oldIP);
     console.log("  New IP:", newInfo.wan_ip);
 
     if (oldIP === newInfo.wan_ip) {
-      console.log("⚠️ IP did not change. This may be normal - ISP may assign the same IP.");
+      console.log("⚠️ IP did not change. ISP may have assigned the same IP.");
     } else {
       console.log("✅ IP changed successfully!");
     }
@@ -668,6 +660,191 @@ export async function changeIP(): Promise<ModemInfo> {
   } catch (error: any) {
     console.error("Error changing IP:", error.message);
     throw new Error("Gagal mengganti IP: " + error.message);
+  }
+}
+
+/**
+ * Trigger PLMN network scan using /api/net/plmn-list
+ * This is a GET request that causes the modem to scan for available networks
+ * which disconnects and reconnects the current network, often resulting in new IP
+ */
+export async function triggerPLMNScan(): Promise<{ success: boolean; networks?: string[] }> {
+  try {
+    console.log("Requesting PLMN list (network scan)...");
+
+    // Ensure we're logged in
+    if (!currentSession) {
+      await autoLogin();
+    }
+
+    // Get fresh token for the request
+    const { token } = await getToken();
+
+    // GET request to /api/net/plmn-list - this triggers network scan
+    const res = await axios.get(`${getBaseURL()}/net/plmn-list`, {
+      headers: {
+        Cookie: currentSession || "",
+        __RequestVerificationToken: token,
+      },
+      timeout: 120000, // 2 minutes timeout - scan can take a while
+      validateStatus: () => true,
+    });
+
+    const responseData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+    console.log("PLMN scan response:", responseData.substring(0, 300));
+
+    // Check for errors
+    if (responseData.includes("<error>")) {
+      const errorCode = parseXMLValue(responseData, "code");
+      console.log(`PLMN scan error code: ${errorCode}`);
+      // Even with error, the scan might have triggered reconnection
+      return { success: false };
+    }
+
+    // Parse networks if available
+    const networks: string[] = [];
+    const fullNameMatches = responseData.matchAll(/<FullName>([^<]+)<\/FullName>/g);
+    for (const match of fullNameMatches) {
+      networks.push(match[1]);
+    }
+
+    console.log(`Found ${networks.length} networks:`, networks.join(", "));
+    return { success: true, networks };
+  } catch (error: any) {
+    console.error("PLMN scan error:", error.message);
+    // Even if request fails, modem might have started the scan process
+    return { success: false };
+  }
+}
+
+/**
+ * Reboot modem using /api/device/control endpoint
+ */
+export async function rebootModem(): Promise<{ success: boolean; error?: string }> {
+  try {
+    console.log("Preparing to reboot modem...");
+
+    // Fresh login
+    currentSession = null;
+    currentToken = null;
+    const loginSuccess = await autoLogin();
+
+    if (!loginSuccess || !currentSession) {
+      return { success: false, error: "Login failed" };
+    }
+
+    // Get fresh token for POST request
+    const { token: freshToken } = await getToken();
+
+    console.log("Sending reboot command...");
+    console.log("Token:", freshToken.substring(0, 20) + "...");
+
+    // Use /api/device/control with Control=1 for reboot
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<request>
+  <Control>1</Control>
+</request>`;
+
+    const res = await axios.post(`${getBaseURL()}/device/control`, xml, {
+      headers: {
+        __RequestVerificationToken: freshToken,
+        "Content-Type": "application/xml",
+        Cookie: currentSession,
+      },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+
+    const responseData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+    console.log("Reboot response:", responseData.substring(0, 200));
+
+    if (responseData.includes("<response>OK</response>")) {
+      return { success: true };
+    }
+
+    // Check for error code
+    const errorCode = parseXMLValue(responseData, "code");
+    if (errorCode) {
+      console.log(`Reboot error code: ${errorCode}`);
+      return { success: false, error: `Error code: ${errorCode}` };
+    }
+
+    return { success: false, error: "Unknown error" };
+  } catch (error: any) {
+    console.error("Reboot error:", error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Set mobile data on/off using mobile-dataswitch endpoint
+ * This is more reliable than dialup/dial
+ * IMPORTANT: Huawei tokens are single-use, so we need fresh token for each POST
+ */
+export async function setMobileData(enabled: boolean): Promise<{ success: boolean; response?: string }> {
+  try {
+    // Fresh login for each operation
+    currentSession = null;
+    currentToken = null;
+    await autoLogin();
+
+    if (!currentSession) {
+      throw new Error("No valid session after login");
+    }
+
+    // Store session for TypeScript type narrowing
+    const sessionCookie: string = currentSession;
+
+    // CRITICAL: Get a fresh token AFTER login for the POST request
+    // The login token is consumed by the login itself
+    // Huawei uses single-use tokens!
+    const { token: freshToken } = await getToken();
+
+    const action = enabled ? 1 : 0;
+    const actionName = enabled ? "ON" : "OFF";
+
+    console.log(`Setting mobile data ${actionName}...`);
+    console.log("Fresh Token:", freshToken.substring(0, 20) + "...");
+    console.log("Session:", sessionCookie.substring(0, 30) + "...");
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<request>
+  <dataswitch>${action}</dataswitch>
+</request>`;
+
+    const res = await axios.post(`${getBaseURL()}/dialup/mobile-dataswitch`, xml, {
+      headers: {
+        __RequestVerificationToken: freshToken,
+        "Content-Type": "application/xml",
+        Cookie: sessionCookie,
+      },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+
+    const responseData = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+    console.log(`Mobile data ${actionName} response:`, responseData.substring(0, 150));
+
+    // Update token from response if available
+    const respToken = res.headers['__requestverificationtoken'];
+    if (respToken) {
+      currentToken = String(respToken);
+    }
+
+    if (responseData.includes("<response>OK</response>")) {
+      return { success: true, response: responseData };
+    }
+
+    // Check for specific error codes
+    const errorCode = parseXMLValue(responseData, "code");
+    if (errorCode) {
+      console.log(`Error code: ${errorCode}`);
+    }
+
+    return { success: false, response: responseData };
+  } catch (error: any) {
+    console.error(`Error setting mobile data:`, error.message);
+    return { success: false };
   }
 }
 

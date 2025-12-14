@@ -82,9 +82,10 @@ export function confirmChangeIP(): {
     text: `⚠️ **Konfirmasi Ganti IP**
 
 Proses ini akan:
-1. Disconnect koneksi modem
-2. Reconnect untuk mendapat IP baru
-3. Memakan waktu ~10 detik
+1. Scan jaringan (PLMN) untuk mendapatkan IP baru
+2. Koneksi internet mungkin terputus sebentar
+
+⏱️ Estimasi waktu: **~20 detik**
 
 Lanjutkan?`,
     reply_markup: {
