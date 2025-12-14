@@ -12,7 +12,7 @@ Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara
 
 | Fitur | Deskripsi |
 |-------|-----------|
-| 🔄 **Ganti IP WAN** | Disconnect/reconnect modem untuk mendapatkan IP baru |
+| 🔄 **Ganti IP WAN** | Scan jaringan (PLMN) untuk mendapatkan IP baru (~20 detik) |
 | 📊 **Detail Modem** | Informasi lengkap: IP, Provider, Sinyal, Pemakaian Data |
 | 📶 **Kualitas Sinyal** | Monitor RSSI dan kekuatan sinyal real-time |
 | 📈 **Statistik Data** | Total unduhan, unggahan, dan pemakaian bulanan |
@@ -37,7 +37,7 @@ Bot Telegram untuk monitoring dan mengganti IP WAN pada modem Huawei B312 secara
 🌐 Alamat IP: 10.40.18.12
 📶 Operator: Telkomsel
 📊 Pemakaian: ⬇️ 2.93 GB / ⬆️ 416 MB
-🕐 IP Terakhir Diubah: 13/12/2024, 12:30
+🕐 IP Terakhir Diubah: 14-12-2024, 12:30:00
 
 ━━━━━━━━━━━━━━━━━━━━
 ```
@@ -124,7 +124,7 @@ bun run start
 
 | Tombol | Fungsi |
 |--------|--------|
-| 🔄 **Ganti IP** | Disconnect dan reconnect modem untuk IP baru |
+| 🔄 **Ganti IP** | Scan jaringan (PLMN) untuk IP baru (~20 detik) |
 | 📊 **Detail** | Lihat informasi lengkap modem |
 | ⚙️ **Pengaturan** | Konfigurasi dan login modem |
 
@@ -146,11 +146,11 @@ Bot ini menggunakan Huawei HiLink API:
 |----------|------|
 | `/api/device/information` | Nama perangkat, IP WAN, IMEI |
 | `/api/net/current-plmn` | Nama operator/provider |
+| `/api/net/plmn-list` | **Scan jaringan (untuk ganti IP)** |
 | `/api/device/signal` | Kekuatan sinyal (RSSI, RSRP) |
 | `/api/monitoring/traffic-statistics` | Total upload/download |
 | `/api/monitoring/month_statistics` | Statistik bulanan |
 | `/api/user/login` | Autentikasi |
-| `/api/dialup/dial` | Disconnect/reconnect PPP |
 | `/api/dialup/mobile-dataswitch` | On/off koneksi data |
 
 ---
@@ -207,12 +207,12 @@ bot-hmonn/
 
 ### ⚠️ Catatan Penting tentang Ganti IP
 
-Fitur ganti IP bekerja dengan cara disconnect/reconnect koneksi PPP. Namun, **beberapa ISP memberikan IP yang sama** (sticky IP) meskipun sudah disconnect. Ini adalah perilaku normal dari ISP, bukan bug bot.
+Fitur ganti IP bekerja dengan **scan jaringan (PLMN)** yang menyebabkan modem disconnect dan reconnect. Metode ini sama dengan yang digunakan di library Python `huawei-lte-api`.
 
-Untuk memaksa IP berubah:
-1. Tunggu beberapa menit sebelum mencoba lagi
-2. Coba pada waktu berbeda (jam sibuk vs sepi)
-3. Beberapa ISP memerlukan modem restart fisik
+**Catatan:**
+- Proses memakan waktu ~20 detik
+- Beberapa ISP memberikan IP yang sama (sticky IP) meskipun sudah reconnect
+- Ini adalah perilaku normal dari ISP, bukan bug bot
 
 ---
 

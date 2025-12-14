@@ -36,7 +36,8 @@ bot-hmonn/
 ### 🔧 Modem Functions
 - [x] `getToken()` - Ambil authentication token
 - [x] `getWanIP()` - Ambil IP WAN saat ini
-- [x] `changeIP()` - Ganti IP dengan reconnect
+- [x] `changeIP()` - Ganti IP dengan PLMN scan
+- [x] `triggerPLMNScan()` - Scan jaringan untuk reconnect
 - [x] `login()` - Login ke modem dengan SHA256 encoding
 - [x] `checkConnection()` - Cek koneksi modem
 
@@ -126,9 +127,8 @@ MODEM_PASSWORD=1sampek8
    User: Klik "🔄 Ganti IP"
    Bot: Konfirmasi dialog
    User: Klik "✅ Ya, Ganti IP"
-   Bot: "⏳ Sedang mengganti IP..."
-   Bot: Disconnect modem
-   Bot: Connect modem
+   Bot: "⏳ Sedang mengganti IP... Scanning jaringan (PLMN)..."
+   Bot: Scan PLMN (trigger reconnect)
    Bot: "✅ IP Berhasil Diganti! IP Baru: xx.xx.xx.xx"
    ```
 
@@ -158,22 +158,22 @@ MODEM_PASSWORD=1sampek8
 
 Endpoints used:
 - `GET /api/webserver/SesTokInfo` - Get token & session
-- `GET /api/monitoring/status` - Get WAN IP
+- `GET /api/device/information` - Get device info & WAN IP
+- `GET /api/net/plmn-list` - Scan networks (for IP change)
 - `POST /api/user/login` - Login with credentials
-- `POST /api/dialup/mobile-dataswitch` - Disconnect/Connect
 
 ### Password Encoding
 ```
 SHA256(username + base64(SHA256(password)) + token)
 ```
 
-### XML Payloads
-```xml
-<!-- Disconnect -->
-<request><dataswitch>0</dataswitch></request>
+### IP Change Method
+```
+// PLMN Scan (GET request)
+GET /api/net/plmn-list
 
-<!-- Connect -->
-<request><dataswitch>1</dataswitch></request>
+// Response: List of available networks
+// Side effect: Modem disconnects and reconnects to network
 ```
 
 ## ✅ Quality Checks
@@ -217,7 +217,7 @@ Bot sudah siap digunakan. Langkah selanjutnya:
 
 ---
 
-**Build Date**: 2025-12-11  
+**Build Date**: 2025-12-14  
 **Bun Version**: 1.3.4  
 **TypeScript**: 5.9.3  
 **Status**: ✅ READY TO DEPLOY

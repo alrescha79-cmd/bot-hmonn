@@ -43,7 +43,7 @@ IP berubah: [TIMESTAMP]
 ### 4. Ganti IP
 - Klik tombol **🔄 Ganti IP**
 - Konfirmasi dengan klik **✅ Ya, Ganti IP**
-- Tunggu ~10 detik
+- Tunggu ~20 detik (PLMN scan)
 - Bot akan memberitahu IP baru
 
 ---
@@ -51,10 +51,10 @@ IP berubah: [TIMESTAMP]
 ## 🎯 Fitur yang Tersedia
 
 ### ✅ Fully Functional
-1. **Ganti IP WAN** - Disconnect/reconnect modem untuk dapat IP baru
+1. **Ganti IP WAN** - Scan jaringan (PLMN) untuk dapat IP baru
 2. **Cek Status** - Lihat status koneksi dan IP saat ini
 3. **Menu Navigasi** - Interface yang mudah digunakan
-4. **Tracking** - Timestamp setiap perubahan IP
+4. **Tracking** - Timestamp setiap perubahan IP (format: DD-MM-YYYY, HH:MM:SS)
 
 ### ⚠️ Dengan Catatan
 5. **Get IP Detail** - Mungkin perlu login manual ke modem web UI
@@ -231,6 +231,6 @@ Jika ada masalah:
 
 ---
 
-*Build Date: 2025-12-11*  
+*Build Date: 2025-12-14*  
 *Build Tool: Bun v1.3.4*  
 *Status: Production Ready ✅*

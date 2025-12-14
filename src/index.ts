@@ -12,6 +12,7 @@ import {
   setModemIP,
   getModemIP,
   setModemCredentials,
+  normalizeTimestamp,
   ModemInfo,
 } from "./modem";
 import {
@@ -90,7 +91,8 @@ async function getModemInfoWithTimestamp(): Promise<ModemInfo> {
   const lastInfo = await getLastIPInfo();
 
   if (lastInfo.timestamp) {
-    info.timestamp = lastInfo.timestamp;
+    // Normalize timestamp to DD-MM-YYYY, HH:MM:SS format
+    info.timestamp = normalizeTimestamp(lastInfo.timestamp);
   }
 
   return info;
@@ -331,7 +333,9 @@ bot.action("chg_ip", async (ctx) => {
 bot.action("confirm_chg_ip", async (ctx) => {
   try {
     await ctx.answerCbQuery("Memulai proses ganti IP...");
-    await ctx.editMessageText("⏳ Sedang mengganti IP...\n\nProses ini memakan waktu ~10 detik.");
+    await ctx.editMessageText("⏳ **Sedang mengganti IP...**\n\n🔄 Scanning jaringan (PLMN)...\n⏱️ Estimasi waktu: ~20 detik\n\n_Harap tunggu..._", {
+      parse_mode: "Markdown",
+    });
 
     // Execute IP change
     const newInfo = await changeIP();

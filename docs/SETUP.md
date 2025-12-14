@@ -49,7 +49,7 @@ bun run start
 1. Start bot dengan command `/start`
 2. Bot akan menampilkan IP WAN saat ini
 3. Pilih "Ganti IP" untuk mendapatkan IP baru
-4. Proses займет ~10 detik
+4. Proses scan jaringan (PLMN) ~20 detik
 
 ## 🔧 Konfigurasi Modem
 
@@ -72,10 +72,10 @@ Jika Anda sudah mengubah password modem, gunakan menu "Konfigurasi" > "Login ke 
 2. Coba reset modem ke factory settings
 3. Gunakan credentials default
 
-### IP tidak berubah setelah reconnect
-1. Tunggu lebih lama (~20-30 detik)
-2. Provider mungkin memberikan IP yang sama
-3. Coba beberapa kali
+### IP tidak berubah setelah PLMN scan
+1. Tunggu beberapa menit dan coba lagi
+2. Provider mungkin memberikan IP yang sama (sticky IP)
+3. Ini normal, bukan bug bot
 
 ## 🔐 Keamanan
 

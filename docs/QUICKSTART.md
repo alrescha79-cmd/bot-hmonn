@@ -59,15 +59,14 @@ Output yang diharapkan:
    ```
 
 4. Klik **🔄 Ganti IP** untuk mengganti IP WAN
-5. Tunggu ~10 detik
+5. Tunggu ~20 detik (PLMN scan)
 6. Bot akan memberitahu IP baru
 
 ## 🎯 Fitur
 
 ### Ganti IP
-- Disconnect modem
-- Reconnect untuk dapat IP baru
-- Proses ~10 detik
+- Scan jaringan (PLMN) untuk dapat IP baru
+- Proses ~20 detik
 - Otomatis save timestamp
 
 ### Konfigurasi
